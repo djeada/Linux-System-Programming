@@ -1,0 +1,10 @@
+101,5,Pizza Margherita,3
+102,2,Spaghetti Carbonara,2
+103,8,Caesar Salad,1
+104,3,Burger & Fries,4
+105,6,Sushi Platter,5
+106,4,Grilled Steak,4
+107,7,Veggie Wrap,2
+108,1,Chicken Salad,3
+109,9,Pasta Primavera,2
+110,2,Chocolate Cake,1
