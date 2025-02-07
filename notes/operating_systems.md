@@ -4,7 +4,7 @@ An **Operating System (OS)** serves as an interface between the user and the com
 
 ---
 
-## Key Responsibilities of an Operating System
+## Responsibilities of an Operating System
 
 - **Process Management:**  
   Handling the creation, scheduling, and termination of processes.
