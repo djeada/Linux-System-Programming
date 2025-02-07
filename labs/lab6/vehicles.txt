@@ -1,0 +1,10 @@
+C Toyota
+T Freightliner
+C Honda
+T Volvo
+C Chevrolet
+T Mack
+C Ford
+T Peterbilt
+C Nissan
+T Kenworth
