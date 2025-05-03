@@ -2,6 +2,8 @@
 
 Welcome to the **Linux Programming** repository! This resource offers a comprehensive collection of notes, tutorials, and reference materials on Linux system programming.
 
+![linux_system_programming](https://github.com/user-attachments/assets/f3e18e63-7e2c-4705-b400-37fa533f6d35)
+
 ## Introduction
 
 Linux system programming involves interacting directly with the kernel, managing hardware resources, and developing low-level applications. This repository aims to be your go-to resource for understanding these concepts, blending theoretical insights with practical examples.
