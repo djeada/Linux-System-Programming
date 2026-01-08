@@ -1,41 +1,77 @@
-**parking garage**
+**Parking Garage Simulation**
 
-Below is a complete implementation for the following task. In this task you will simulate a parking garage that can accommodate a limited number of vehicles at a time—but only vehicles of the same type may park together. Each vehicle is represented by a separate process. The shared memory region maintains the current state of the garage (including the number of parked vehicles, total parking spots, and the type of vehicle currently occupying the garage), and a semaphore is used to protect access to this shared state. Additionally, the program reads vehicle data (vehicle type and model name) from a file (named `vehicles.txt`); make sure the path to that file is specified correctly in your source code.
+**Objective**  
+Simulate a parking garage with **processes** and **shared memory**, enforcing a rule that only **one vehicle type** may park at a time.
 
-- **Objective:**  
-  Learn how to use shared memory and semaphores to synchronize multiple processes. In this simulation:
-  - The parking garage has a fixed number of parking spots (provided as the first command-line argument).
-  - A list of vehicles (with type and model name) is read from a file named `vehicles.txt`.
-  - Each vehicle is represented by a process that attempts to park.
-  - **Rules for Parking:**
-    - If the garage is empty or currently occupied by vehicles of the same type, a vehicle will park if there is an available spot.
-    - If the garage is occupied by vehicles of a different type, the vehicle must wait until the garage is completely empty.
-  - Once parked, a vehicle will simulate being parked for a short random duration before leaving, after which the shared state is updated.
+**Concepts Covered**
 
-- **Input File:**  
-  The file `vehicles.txt` should contain one vehicle per line in the following format:
-  ```
-  C Toyota
-  T Freightliner
-  C Honda
-  T Volvo
-  ```
-  Here, the first letter indicates the type of the vehicle (for example, 'C' for car and 'T' for truck), and the following string is the model name. The number of lines read should match (or exceed) the total number of vehicles specified as the second command-line argument.
+- Process synchronization
+- Shared memory (`mmap`) across processes
+- POSIX semaphores and mutual exclusion
+- Fair access policies
 
-- **Compilation and Execution Instructions:**
-  - **Compilation:**  
-    Use the standard GCC command (link with `-pthread` if needed):
-    ```bash
-    gcc parking_garage.c -o parking_garage -pthread
-    ```
-  - **Execution:**  
-    Run the executable by supplying two arguments:
-    ```bash
-    ./parking_garage <number_of_spots> <number_of_vehicles>
-    ```
-    For example:
-    ```bash
-    ./parking_garage 5 10
-    ```
+**C APIs You Will Likely Use**
 
-cess communication—all within a creative and practical simulation scenario. Happy coding!
+- `fork`, `waitpid`, `getpid`
+- `mmap`, `munmap`
+- `sem_init`, `sem_wait`, `sem_post`, `sem_destroy`
+- `fopen`, `fgets`, `sscanf`, `printf`
+
+**What You Must Implement**
+
+1. **Shared state**  
+   Use shared memory to store:
+   - current vehicle type inside the garage
+   - number of vehicles parked
+   - number of waiting vehicles (per type)
+   - total spots
+   - semaphores for synchronization
+
+2. **Vehicle processes**  
+   Each vehicle is a process that:
+   - arrives, attempts to park, and waits if necessary
+   - parks for a random duration
+   - exits and updates shared state
+
+3. **Parking rules**  
+   - If the garage is empty, the arriving vehicle sets the type.
+   - If the garage is occupied by the **same type**, vehicles may enter until spots are full.
+   - If the garage is occupied by a **different type**, vehicles must wait until the garage is empty.
+
+4. **Input file**  
+   Read vehicles from `vehicles.txt`. Each line:
+   ```
+   C Toyota
+   T Freightliner
+   ```
+   `C` = car, `T` = truck, followed by a model name (one word).
+
+5. **Command-line arguments**  
+   - `argv[1]`: number of parking spots  
+   - `argv[2]`: number of vehicles to simulate
+   - `argv[3]` (optional): path to vehicles file (default: `vehicles.txt`)
+
+**Constraints and Edge Cases**
+
+- Reject invalid arguments (non-positive or malformed numbers).
+- Handle cases where the input file has fewer valid vehicles than requested.
+- Avoid busy-waiting; blocked vehicles should wait on semaphores.
+
+**Deliverables**
+
+- `main.c`
+- `README.md`
+- `vehicles.txt`
+
+**Build and Run**
+
+```sh
+cc -std=c11 -Wall -Wextra -pedantic -o parking_garage main.c -pthread
+./parking_garage <number_of_spots> <number_of_vehicles> [vehicles_file]
+```
+
+Example:
+
+```sh
+./parking_garage 5 10 vehicles.txt
+```

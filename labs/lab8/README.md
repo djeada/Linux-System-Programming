@@ -1,97 +1,82 @@
-**Task: Restaurant Order Processing Simulation**
+**Restaurant Order Processing Simulation**
 
-### **Objective**
+**Objective**  
+Build a concurrent restaurant simulation with **customers** (producers), **chefs** (consumers), and a **reporter** using threads, mutexes, and condition variables.
 
-Design and implement a concurrent simulation of a restaurant’s order processing system. This system will involve multiple types of threads that interact via a shared, thread-safe order queue. You will gain hands-on experience with:
+**Concepts Covered**
 
-- Creating and managing multiple threads (producers, consumers, and a reporter)
-- Synchronizing threads using mutexes and condition variables (with timed waits)
-- Dynamically enqueuing and dequeuing tasks (orders) in a shared work queue
-- Periodically reporting system status while processing is underway
+- Multi-threaded producer/consumer patterns
+- Thread-safe queues with condition variables
+- Coordinated shutdown
+- Timed waits for periodic reporting
 
-### **Task Description**
+**C APIs You Will Likely Use**
 
-1. **Roles and Responsibilities:**
+- `pthread_create`, `pthread_join`
+- `pthread_mutex_lock`, `pthread_mutex_unlock`, `pthread_mutex_destroy`
+- `pthread_cond_wait`, `pthread_cond_signal`, `pthread_cond_broadcast`, `pthread_cond_timedwait`, `pthread_cond_destroy`
+- `clock_gettime`, `time`, `sleep`, `usleep`
+- `fopen`, `fgets`, `strtok_r`, `printf`
 
-   - **Customer Threads (Producers):**
-     - These threads simulate customers placing orders.
-     - Orders are read from an input file (see “Input File Format” below) where each line describes an order (for example, order ID, table number, and order details).
-     - Each customer thread enqueues one or more orders into the shared work queue.
-   
-   - **Chef Threads (Consumers):**
-     - These threads represent chefs who process orders.
-     - A chef thread continuously dequeues orders from the shared order queue.
-     - When processing an order, a chef prints the order details and simulates preparation by sleeping for a specified duration (provided in the order).
-     - Chefs update a shared statistic (such as the total number of orders processed) after completing each order.
+**What You Must Implement**
 
-   - **Reporter Thread:**
-     - A dedicated reporter thread periodically (e.g., every few seconds) prints the current status of the system.
-     - The status should include the number of orders waiting in the queue and the total number of orders processed so far.
-     - This thread must use timed waits to trigger status reports without interfering with order processing.
+1. **Order queue**  
+   - Shared, thread-safe queue of orders.  
+   - Protected by a mutex and condition variable.
 
-2. **Shared Work Queue:**
+2. **Customer threads (producers)**  
+   - Pull orders from an input file.  
+   - Enqueue orders into the shared queue.  
+   - Stop after the simulation duration or when orders run out.
 
-   - Implement the order queue using a dynamic data structure (for example, a linked list or circular buffer).
-   - The queue must be protected by a mutex so that concurrent access (from customer and chef threads) does not lead to race conditions.
-   - A condition variable is used to signal chef threads when new orders are enqueued.
-   - Use a timed wait mechanism for chef threads, if desired, to allow them to periodically check for a graceful shutdown signal (see Shutdown section below).
+3. **Chef threads (consumers)**  
+   - Dequeue orders and process them (sleep for prep time).  
+   - Update a shared counter of completed orders.
 
-3. **Input File Format:**
+4. **Reporter thread**  
+   - Periodically prints: waiting orders + total processed.
+   - Exits when all work is done.
 
-   - The program will read orders from a text file specified by a command-line argument.
-   - Each line in the file represents a single order and is formatted as follows:
-     ```
-     ORDER_ID,TableNumber,OrderDescription,PreparationTime
-     ```
-     For example:
-     ```
-     101,5,Pizza Margherita,3
-     102,2,Spaghetti Carbonara,2
-     103,8,Caesar Salad,1
-     ```
-   - Ensure that your program correctly parses each line into an order structure.
+5. **Shutdown**  
+   - After the simulation duration, customers stop producing.  
+   - Chefs finish remaining orders and exit cleanly.  
+   - All threads join before program exit.
 
-4. **Command-Line Arguments:**
+**Input File Format**
 
-   Your program should accept the following arguments:
-   - The number of customer threads (producers)
-   - The number of chef threads (consumers)
-   - The path to the input file containing orders
-   - The total simulation duration (in seconds) after which no new orders will be enqueued and the system will begin a graceful shutdown
+Each line in the input file:
+```
+ORDER_ID,TableNumber,OrderDescription,PreparationTime
+```
+Example:
+```
+101,5,Pizza Margherita,3
+102,2,Spaghetti Carbonara,2
+103,8,Caesar Salad,1
+```
 
-   **Example:**
-   ```bash
-   ./restaurant 4 3 orders.txt 30
-   ```
-   This command starts 4 customer threads, 3 chef threads, reads orders from `orders.txt`, and runs the simulation for 30 seconds.
+**Constraints and Edge Cases**
 
-5. **Shutdown and Cleanup:**
+- Skip malformed lines and continue processing.
+- Trim whitespace around fields if present.
+- Ensure chefs stop when producers are done and the queue is empty.
+- Reporter should not block order processing.
 
-   - After the specified simulation duration, the system should signal all threads to finish processing.
-   - Customer threads should stop enqueuing new orders.
-   - Chef threads should finish processing any remaining orders in the queue and then exit gracefully.
-   - The reporter thread should perform a final status report before terminating.
-   - All dynamically allocated resources (such as memory for the work queue, mutexes, and condition variables) must be properly cleaned up before the program exits.
+**Deliverables**
 
-6. **Synchronization and Concurrency:**
+- `main.c`
+- `README.md`
+- `orders.txt`
 
-   - Use mutexes to protect shared resources (order queue and statistics).
-   - Employ condition variables to manage signaling between customer and chef threads.
-   - Incorporate timed waits (e.g., `pthread_cond_timedwait`) to allow threads to periodically check for shutdown signals or to trigger periodic reports in the reporter thread.
-   - Design your solution to avoid race conditions, deadlocks, and starvation.
+**Build and Run**
 
-### **Additional Considerations**
+```sh
+cc -std=c11 -Wall -Wextra -pedantic -o restaurant main.c -pthread
+./restaurant <num_customers> <num_chefs> <input_file> <simulation_duration>
+```
 
-- **Robustness:**  
-  Ensure your program gracefully handles errors such as file I/O issues, thread creation failures, or malformed input lines.
+Example:
 
-- **Modular Design:**  
-  Break down your solution into clearly defined functions:
-  - Functions for enqueuing and dequeuing orders
-  - A customer thread function that reads orders from the input file and enqueues them
-  - A chef thread function that dequeues and processes orders
-  - A reporter thread function that prints status updates at regular intervals
-
-- **Testing:**  
-  Test your program with various input files, different numbers of customer and chef threads, and multiple simulation durations to ensure that your system behaves correctly under different loads and shutdown conditions.
-
+```sh
+./restaurant 4 3 orders.txt 30
+```
