@@ -73,7 +73,7 @@ To work with the labs and examples in this repository, you'll need:
 - **Compiler:** GCC (recommended) or Clang with C11 support
   ```sh
   # Install GCC on Ubuntu/Debian
-  sudo apt-get update && sudo apt-get install build-essential
+  sudo apt update && sudo apt install build-essential
   
   # Verify installation
   gcc --version
@@ -86,7 +86,7 @@ To work with the labs and examples in this repository, you'll need:
 Here's how to get started with your first lab:
 
 ```sh
-# Clone the repository
+# Clone the repository (or your fork)
 git clone https://github.com/djeada/Linux-System-Programming.git
 cd Linux-System-Programming
 
