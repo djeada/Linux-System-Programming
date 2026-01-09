@@ -1,284 +1,330 @@
+#include <ctype.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
-#include <unistd.h>
 #include <time.h>
-#include <ctype.h>
+#include <unistd.h>
 
 #define MAX_ROWS 100
 #define MAX_COLS 100
 #define TIMEOUT_SECONDS 5
 
-// Global maze variables
-char maze[MAX_ROWS][MAX_COLS];
-int revealed[MAX_ROWS][MAX_COLS]; // 0: hidden, 1: revealed
-int rows = 0, cols = 0;
-int playerRow = -1, playerCol = -1;
+#define WALL_CELL '#'
+#define START_CELL 'S'
+#define EXIT_CELL 'E'
+#define PLAYER_CELL 'P'
+#define HIDDEN_CELL '?'
 
-// Flag to indicate game over (win)
-int gameCompleted = 0;
+static char maze[MAX_ROWS][MAX_COLS];
+static bool revealed[MAX_ROWS][MAX_COLS];
+static int rows = 0;
+static int cols = 0;
+static int player_row = -1;
+static int player_col = -1;
+static bool game_completed = false;
 
-// Function prototypes
-void loadMaze(const char *filename);
-void printMaze(void);
-void revealCell(int r, int c);
-void revealAdjacentHint(void);
-void cheatHandler(int signo);
-void alarmHandler(int signo);
-void quitHandler(int signo);
-void revealRandomSafeCell(void);
+static void load_maze(const char *filename);
+static void print_maze(void);
+static void clear_screen(void);
+static void reveal_cell(int r, int c);
+static void reveal_surroundings(int r, int c);
+static bool reveal_adjacent_hint(void);
+static void reveal_random_safe_cell(void);
+static bool is_maze_fully_revealed(void);
+static bool in_bounds(int r, int c);
+static bool read_move(char *move_out);
+
+static void cheat_handler(int signo);
+static void alarm_handler(int signo);
+static void quit_handler(int signo);
 
 int main(int argc, char *argv[]) {
-    // Ensure a maze file is provided.
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <maze_file>\n", argv[0]);
-        exit(EXIT_FAILURE);
+  if (argc != 2) {
+    fprintf(stderr, "Usage: %s <maze_file>\n", argv[0]);
+    return EXIT_FAILURE;
+  }
+
+  load_maze(argv[1]);
+  srand((unsigned int)time(NULL));
+
+  signal(SIGALRM, alarm_handler);
+  signal(SIGINT, quit_handler);
+  signal(SIGTSTP, cheat_handler);
+
+  while (!game_completed) {
+    print_maze();
+    printf("\nUse W (up), A (left), S (down), D (right) to move: ");
+    fflush(stdout);
+
+    char move = '\0';
+    if (!read_move(&move)) {
+      printf("\nInput error. Exiting...\n");
+      return EXIT_FAILURE;
     }
-    
-    // Load the maze from the file.
-    loadMaze(argv[1]);
-    
-    // Seed the random number generator.
-    srand((unsigned int) time(NULL));
-    
-    // Set up signal handlers.
-    signal(SIGALRM, alarmHandler); // Timeout if no input within TIMEOUT_SECONDS.
-    signal(SIGINT, quitHandler);     // Quit if user presses Ctrl+C.
-    signal(SIGTSTP, cheatHandler);   // Cheat mode if user presses Ctrl+Z.
-    
-    char inputBuffer[10];
-    char move;
-    
-    while (!gameCompleted) {
-        // Display the maze.
-        printMaze();
-        printf("\nUse W (up), A (left), S (down), D (right) to move: ");
-        
-        // Set an alarm for timeout.
-        alarm(TIMEOUT_SECONDS);
-        if (fgets(inputBuffer, sizeof(inputBuffer), stdin) == NULL) {
-            // If input fails, exit.
-            printf("\nInput error. Exiting...\n");
-            exit(EXIT_FAILURE);
-        }
-        // Cancel the alarm once input is received.
-        alarm(0);
-        
-        // Process only the first non-whitespace character.
-        move = '\0';
-        for (int i = 0; inputBuffer[i] != '\0'; i++) {
-            if (!isspace(inputBuffer[i])) {
-                move = toupper(inputBuffer[i]);
-                break;
-            }
-        }
-        
-        // Determine the new player position based on input.
-        int newRow = playerRow, newCol = playerCol;
-        if (move == 'W') {
-            newRow = playerRow - 1;
-        } else if (move == 'A') {
-            newCol = playerCol - 1;
-        } else if (move == 'S') {
-            newRow = playerRow + 1;
-        } else if (move == 'D') {
-            newCol = playerCol + 1;
-        } else {
-            printf("\nInvalid command. Please use W, A, S, or D.\n");
-            continue;
-        }
-        
-        // Check bounds.
-        if (newRow < 0 || newRow >= rows || newCol < 0 || newCol >= cols) {
-            printf("\nYou can't move outside the maze! Here's a hint.\n");
-            revealAdjacentHint();
-            continue;
-        }
-        
-        // Check if moving into a wall.
-        if (maze[newRow][newCol] == '#') {
-            printf("\nYou hit a wall! Here's a hint.\n");
-            revealAdjacentHint();
-            continue;
-        }
-        
-        // Valid move: update player's position.
-        playerRow = newRow;
-        playerCol = newCol;
-        // Reveal the new cell.
-        revealCell(playerRow, playerCol);
-        // Also reveal adjacent cells (simulate exploration).
-        if (playerRow > 0) revealCell(playerRow - 1, playerCol);
-        if (playerRow < rows - 1) revealCell(playerRow + 1, playerCol);
-        if (playerCol > 0) revealCell(playerRow, playerCol - 1);
-        if (playerCol < cols - 1) revealCell(playerRow, playerCol + 1);
-        
-        // Check if the exit is reached.
-        if (maze[playerRow][playerCol] == 'E') {
-            printMaze();
-            printf("\nCongratulations! You have reached the exit!\n");
-            gameCompleted = 1;
-        }
+
+    int new_row = player_row;
+    int new_col = player_col;
+    if (move == 'W') {
+      new_row--;
+    } else if (move == 'A') {
+      new_col--;
+    } else if (move == 'S') {
+      new_row++;
+    } else if (move == 'D') {
+      new_col++;
+    } else {
+      printf("\nInvalid command. Please use W, A, S, or D.\n");
+      continue;
     }
-    
-    return EXIT_SUCCESS;
+
+    if (!in_bounds(new_row, new_col)) {
+      printf("\nYou can't move outside the maze! Here's a hint.\n");
+      reveal_adjacent_hint();
+      continue;
+    }
+
+    if (maze[new_row][new_col] == WALL_CELL) {
+      printf("\nYou hit a wall! Here's a hint.\n");
+      reveal_adjacent_hint();
+      continue;
+    }
+
+    player_row = new_row;
+    player_col = new_col;
+    reveal_surroundings(player_row, player_col);
+
+    if (maze[player_row][player_col] == EXIT_CELL) {
+      print_maze();
+      printf("\nCongratulations! You have reached the exit!\n");
+      game_completed = true;
+      continue;
+    }
+
+    if (is_maze_fully_revealed()) {
+      print_maze();
+      printf("\nThe maze is fully revealed. Game over!\n");
+      game_completed = true;
+    }
+  }
+
+  return EXIT_SUCCESS;
 }
 
-/**
- * loadMaze - Reads the maze from a file.
- * The maze file must have consistent line lengths.
- */
-void loadMaze(const char *filename) {
-    FILE *fp = fopen(filename, "r");
-    if (!fp) {
-        perror("Error opening maze file");
-        exit(EXIT_FAILURE);
+static void load_maze(const char *filename) {
+  FILE *fp = fopen(filename, "r");
+  if (!fp) {
+    perror("Error opening maze file");
+    exit(EXIT_FAILURE);
+  }
+
+  char line[MAX_COLS + 2];
+  bool start_found = false;
+  bool exit_found = false;
+
+  rows = 0;
+  cols = 0;
+
+  while (fgets(line, sizeof(line), fp)) {
+    line[strcspn(line, "\r\n")] = '\0';
+
+    int line_len = (int)strlen(line);
+    if (line_len == 0) {
+      continue;
     }
-    
-    char line[MAX_COLS + 2]; // +2 to account for newline and null terminator.
-    rows = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        // Remove newline character if present.
-        line[strcspn(line, "\n")] = '\0';
-        // On the first line, set the number of columns.
-        if (rows == 0) {
-            cols = strlen(line);
-            if (cols == 0) {
-                fprintf(stderr, "Maze file is empty or invalid.\n");
-                exit(EXIT_FAILURE);
-            }
-        } else if ((int)strlen(line) != cols) {
-            fprintf(stderr, "Inconsistent row lengths in maze file.\n");
-            exit(EXIT_FAILURE);
-        }
-        // Copy the line into the maze.
-        for (int i = 0; i < cols; i++) {
-            maze[rows][i] = line[i];
-            revealed[rows][i] = 0; // Initially hidden.
-            // Find the starting position.
-            if (line[i] == 'S') {
-                playerRow = rows;
-                playerCol = i;
-            }
-        }
-        rows++;
-        if (rows >= MAX_ROWS) break;
+    if (line_len > MAX_COLS) {
+      fprintf(stderr, "Maze row exceeds max columns (%d).\n", MAX_COLS);
+      exit(EXIT_FAILURE);
     }
-    fclose(fp);
-    
-    if (playerRow == -1 || playerCol == -1) {
-        fprintf(stderr, "Maze file must contain a starting position marked with 'S'.\n");
-        exit(EXIT_FAILURE);
+
+    if (rows == 0) {
+      cols = line_len;
+    } else if (line_len != cols) {
+      fprintf(stderr, "Inconsistent row lengths in maze file.\n");
+      exit(EXIT_FAILURE);
     }
-    
-    // Reveal the starting cell and its neighbors.
-    revealCell(playerRow, playerCol);
-    if (playerRow > 0) revealCell(playerRow - 1, playerCol);
-    if (playerRow < rows - 1) revealCell(playerRow + 1, playerCol);
-    if (playerCol > 0) revealCell(playerRow, playerCol - 1);
-    if (playerCol < cols - 1) revealCell(playerRow, playerCol + 1);
+
+    for (int i = 0; i < cols; i++) {
+      maze[rows][i] = line[i];
+      revealed[rows][i] = false;
+      if (line[i] == START_CELL) {
+        player_row = rows;
+        player_col = i;
+        start_found = true;
+      } else if (line[i] == EXIT_CELL) {
+        exit_found = true;
+      }
+    }
+
+    rows++;
+    if (rows >= MAX_ROWS) {
+      fprintf(stderr, "Maze exceeds max rows (%d).\n", MAX_ROWS);
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  fclose(fp);
+
+  if (!start_found) {
+    fprintf(stderr,
+            "Maze file must contain a starting position marked with '%c'.\n",
+            START_CELL);
+    exit(EXIT_FAILURE);
+  }
+  if (!exit_found) {
+    fprintf(stderr, "Maze file must contain an exit marked with '%c'.\n",
+            EXIT_CELL);
+    exit(EXIT_FAILURE);
+  }
+
+  reveal_surroundings(player_row, player_col);
 }
 
-/**
- * printMaze - Displays the maze on screen.
- * Only revealed cells are shown; unrevealed cells appear as '?'.
- * The player's current position is marked with 'P'.
- */
-void printMaze(void) {
-    system("clear");
-    for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < cols; c++) {
-            if (r == playerRow && c == playerCol) {
-                printf("P");
-            } else if (revealed[r][c]) {
-                printf("%c", maze[r][c]);
-            } else {
-                printf("?");
-            }
-        }
-        printf("\n");
-    }
+static void clear_screen(void) {
+  printf("\033[H\033[J");
+  fflush(stdout);
 }
 
-/**
- * revealCell - Marks a cell as revealed.
- */
-void revealCell(int r, int c) {
-    if (r >= 0 && r < rows && c >= 0 && c < cols) {
-        revealed[r][c] = 1;
+static void print_maze(void) {
+  clear_screen();
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (r == player_row && c == player_col) {
+        putchar(PLAYER_CELL);
+      } else if (revealed[r][c]) {
+        putchar(maze[r][c]);
+      } else {
+        putchar(HIDDEN_CELL);
+      }
     }
+    putchar('\n');
+  }
 }
 
-/**
- * revealAdjacentHint - When an invalid move is made,
- * reveals one adjacent unrevealed safe (non-wall) cell.
- */
-void revealAdjacentHint(void) {
-    // Check the four adjacent cells.
-    int dr[4] = {-1, 1, 0, 0};
-    int dc[4] = {0, 0, -1, 1};
-    int found = 0;
-    for (int i = 0; i < 4 && !found; i++) {
-        int nr = playerRow + dr[i];
-        int nc = playerCol + dc[i];
-        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols &&
-            !revealed[nr][nc] && maze[nr][nc] != '#') {
-            revealCell(nr, nc);
-            printf("Hint: Revealed cell at (%d, %d).\n", nr + 1, nc + 1);
-            found = 1;
-        }
-    }
-    if (!found) {
-        printf("No adjacent hint available.\n");
-    }
+static void reveal_cell(int r, int c) {
+  if (in_bounds(r, c)) {
+    revealed[r][c] = true;
+  }
 }
 
-/**
- * revealRandomSafeCell - Reveals a random unrevealed cell that is not a wall.
- * This function is used by the cheat mode.
- */
-void revealRandomSafeCell(void) {
-    int r, c, attempts = 0;
-    // Try up to 100 times to find an unrevealed non-wall cell.
-    while (attempts < 100) {
-        r = rand() % rows;
-        c = rand() % cols;
-        if (!revealed[r][c] && maze[r][c] != '#') {
-            revealCell(r, c);
-            printf("Cheat: Revealed cell at (%d, %d) containing '%c'.\n", r + 1, c + 1, maze[r][c]);
-            return;
-        }
-        attempts++;
+static void reveal_surroundings(int r, int c) {
+  reveal_cell(r, c);
+  reveal_cell(r - 1, c);
+  reveal_cell(r + 1, c);
+  reveal_cell(r, c - 1);
+  reveal_cell(r, c + 1);
+}
+
+static bool reveal_adjacent_hint(void) {
+  static const int dr[4] = {-1, 1, 0, 0};
+  static const int dc[4] = {0, 0, -1, 1};
+
+  for (int i = 0; i < 4; i++) {
+    int nr = player_row + dr[i];
+    int nc = player_col + dc[i];
+    if (in_bounds(nr, nc) && !revealed[nr][nc] && maze[nr][nc] != WALL_CELL) {
+      reveal_cell(nr, nc);
+      printf("Hint: Revealed cell at (%d, %d).\n", nr + 1, nc + 1);
+      return true;
     }
+  }
+
+  printf("No adjacent hint available.\n");
+  return false;
+}
+
+static void reveal_random_safe_cell(void) {
+  int safe_hidden = 0;
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (!revealed[r][c] && maze[r][c] != WALL_CELL) {
+        safe_hidden++;
+      }
+    }
+  }
+
+  if (safe_hidden == 0) {
     printf("Cheat mode: No unrevealed safe cell found.\n");
+    return;
+  }
+
+  int target = rand() % safe_hidden;
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (!revealed[r][c] && maze[r][c] != WALL_CELL) {
+        if (target == 0) {
+          reveal_cell(r, c);
+          printf("Cheat: Revealed cell at (%d, %d) containing '%c'.\n", r + 1,
+                 c + 1, maze[r][c]);
+          return;
+        }
+        target--;
+      }
+    }
+  }
 }
 
-/**
- * cheatHandler - Signal handler for SIGTSTP (Ctrl+Z).
- * Reveals a random safe unrevealed cell.
- */
-void cheatHandler(int signo) {
-    (void)signo;  // Unused parameter
-    printf("\nCheat mode activated!\n");
-    revealRandomSafeCell();
-    printMaze();
+static bool is_maze_fully_revealed(void) {
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      if (!revealed[r][c]) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
-/**
- * alarmHandler - Called when the user takes too long to input a command.
- */
-void alarmHandler(int signo) {
-    (void)signo;  // Unused parameter
-    printf("\nTime's up! Please respond faster.\n");
-    // Note: The game continues; the alarm simply notifies the user.
+static bool in_bounds(int r, int c) {
+  return r >= 0 && r < rows && c >= 0 && c < cols;
 }
 
-/**
- * quitHandler - Called when the user presses Ctrl+C to quit.
- */
-void quitHandler(int signo) {
-    (void)signo;  // Unused parameter
-    printf("\nExiting the Maze Navigator. Goodbye!\n");
-    exit(EXIT_SUCCESS);
+static bool read_move(char *move_out) {
+  char input_buffer[16];
+
+  while (true) {
+    errno = 0;
+    alarm(TIMEOUT_SECONDS);
+
+    if (!fgets(input_buffer, sizeof(input_buffer), stdin)) {
+      alarm(0);
+      if (errno == EINTR) {
+        clearerr(stdin);
+        continue;
+      }
+      return false;
+    }
+
+    alarm(0);
+
+    for (int i = 0; input_buffer[i] != '\0'; i++) {
+      if (!isspace((unsigned char)input_buffer[i])) {
+        *move_out = (char)toupper((unsigned char)input_buffer[i]);
+        return true;
+      }
+    }
+
+    *move_out = '\0';
+    return true;
+  }
+}
+
+static void cheat_handler(int signo) {
+  (void)signo;
+  printf("\nCheat mode activated!\n");
+  reveal_random_safe_cell();
+  print_maze();
+}
+
+static void alarm_handler(int signo) {
+  (void)signo;
+  printf("\nTime's up! Please respond faster.\n");
+}
+
+static void quit_handler(int signo) {
+  (void)signo;
+  printf("\nExiting the Maze Navigator. Goodbye!\n");
+  exit(EXIT_SUCCESS);
 }

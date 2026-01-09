@@ -1,205 +1,292 @@
+#include <errno.h>
+#include <limits.h>
+#include <semaphore.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
-#include <fcntl.h>
-#include <errno.h>
+#include <unistd.h>
 
-// Constants for buffer size and printer line width.
 #define BUF_SIZE 4096
-#define LINE_WIDTH 20
+#define DEFAULT_LINE_WIDTH 20
+#define DEFAULT_INPUT_FILE "input.txt"
+#define EOL_MARKER "<EOL>"
 
-// Change this to point to your input file.
-#define INPUT_FILE "input.txt"
-
-// Shared buffer structure used in both shared memory segments.
 typedef struct {
-    char buffer[BUF_SIZE];  // Buffer to hold text data.
-    int done;               // Flag to indicate completion of processing.
+  char data[BUF_SIZE];
+  size_t head;
+  size_t tail;
+  size_t count;
+  int done;
+  sem_t mutex;
+  sem_t items;
+  sem_t spaces;
 } SharedBuffer;
 
-// Function prototypes for each process.
-void readerProcess(SharedBuffer *shm1);
-void transformerProcess(SharedBuffer *shm1, SharedBuffer *shm2);
-void printerProcess(SharedBuffer *shm2);
+static const char *g_input_path = DEFAULT_INPUT_FILE;
+static int g_line_width = DEFAULT_LINE_WIDTH;
 
-int main(void) {
-    pid_t pid_reader, pid_transformer, pid_printer;
+static void reader_process(SharedBuffer *out);
+static void transformer_process(SharedBuffer *in, SharedBuffer *out);
+static void printer_process(SharedBuffer *in);
 
-    // Create first shared memory region for reader -> transformer.
-    SharedBuffer *shm1 = mmap(NULL, sizeof(SharedBuffer),
-                                PROT_READ | PROT_WRITE,
-                                MAP_SHARED | MAP_ANONYMOUS,
-                                -1, 0);
-    if (shm1 == MAP_FAILED) {
-        perror("mmap for shm1 failed");
-        exit(EXIT_FAILURE);
+static void buffer_init(SharedBuffer *buffer);
+static void buffer_destroy(SharedBuffer *buffer);
+static void buffer_push(SharedBuffer *buffer, char ch);
+static bool buffer_pop(SharedBuffer *buffer, char *out);
+static void buffer_signal_done(SharedBuffer *buffer);
+
+static void safe_sem_wait(sem_t *sem);
+static void safe_sem_post(sem_t *sem);
+static void wait_for_child(pid_t pid);
+static int parse_positive_int(const char *text, const char *label,
+                              int *value_out);
+
+int main(int argc, char *argv[]) {
+  if (argc > 3) {
+    fprintf(stderr, "Usage: %s [input_file] [line_width]\n", argv[0]);
+    return EXIT_FAILURE;
+  }
+
+  if (argc >= 2) {
+    g_input_path = argv[1];
+  }
+
+  if (argc == 3) {
+    if (parse_positive_int(argv[2], "line_width", &g_line_width) != 0) {
+      return EXIT_FAILURE;
     }
+  }
 
-    // Create second shared memory region for transformer -> printer.
-    SharedBuffer *shm2 = mmap(NULL, sizeof(SharedBuffer),
-                                PROT_READ | PROT_WRITE,
-                                MAP_SHARED | MAP_ANONYMOUS,
-                                -1, 0);
-    if (shm2 == MAP_FAILED) {
-        perror("mmap for shm2 failed");
-        exit(EXIT_FAILURE);
-    }
+  SharedBuffer *shm1 = mmap(NULL, sizeof(*shm1), PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (shm1 == MAP_FAILED) {
+    perror("mmap shm1");
+    return EXIT_FAILURE;
+  }
 
-    // Initialize both shared memory regions.
-    shm1->done = 0;
-    shm2->done = 0;
-    memset(shm1->buffer, 0, BUF_SIZE);
-    memset(shm2->buffer, 0, BUF_SIZE);
+  SharedBuffer *shm2 = mmap(NULL, sizeof(*shm2), PROT_READ | PROT_WRITE,
+                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (shm2 == MAP_FAILED) {
+    perror("mmap shm2");
+    return EXIT_FAILURE;
+  }
 
-    /* --- Fork the Reader Process --- */
-    pid_reader = fork();
-    if (pid_reader < 0) {
-        perror("fork for reader failed");
-        exit(EXIT_FAILURE);
-    }
-    if (pid_reader == 0) {
-        readerProcess(shm1);
-        exit(EXIT_SUCCESS);
-    }
+  buffer_init(shm1);
+  buffer_init(shm2);
 
-    /* --- Fork the Transformer Process --- */
-    pid_transformer = fork();
-    if (pid_transformer < 0) {
-        perror("fork for transformer failed");
-        exit(EXIT_FAILURE);
-    }
-    if (pid_transformer == 0) {
-        transformerProcess(shm1, shm2);
-        exit(EXIT_SUCCESS);
-    }
+  pid_t reader_pid = fork();
+  if (reader_pid < 0) {
+    perror("fork reader");
+    return EXIT_FAILURE;
+  }
+  if (reader_pid == 0) {
+    reader_process(shm1);
+    exit(EXIT_SUCCESS);
+  }
 
-    /* --- Fork the Printer Process --- */
-    pid_printer = fork();
-    if (pid_printer < 0) {
-        perror("fork for printer failed");
-        exit(EXIT_FAILURE);
-    }
-    if (pid_printer == 0) {
-        printerProcess(shm2);
-        exit(EXIT_SUCCESS);
-    }
+  pid_t transformer_pid = fork();
+  if (transformer_pid < 0) {
+    perror("fork transformer");
+    return EXIT_FAILURE;
+  }
+  if (transformer_pid == 0) {
+    transformer_process(shm1, shm2);
+    exit(EXIT_SUCCESS);
+  }
 
-    // Parent waits for all child processes to complete.
-    wait(NULL);
-    wait(NULL);
-    wait(NULL);
+  pid_t printer_pid = fork();
+  if (printer_pid < 0) {
+    perror("fork printer");
+    return EXIT_FAILURE;
+  }
+  if (printer_pid == 0) {
+    printer_process(shm2);
+    exit(EXIT_SUCCESS);
+  }
 
-    // Clean up shared memory regions.
-    munmap(shm1, sizeof(SharedBuffer));
-    munmap(shm2, sizeof(SharedBuffer));
+  wait_for_child(reader_pid);
+  wait_for_child(transformer_pid);
+  wait_for_child(printer_pid);
 
-    return EXIT_SUCCESS;
+  buffer_destroy(shm1);
+  buffer_destroy(shm2);
+  munmap(shm1, sizeof(*shm1));
+  munmap(shm2, sizeof(*shm2));
+
+  return EXIT_SUCCESS;
 }
 
-/**
- * readerProcess:
- *   Reads an input file character by character.
- *   Replaces any newline '\n' with "<EOL>".
- *   Writes the result into shared memory region shm1.
- */
-void readerProcess(SharedBuffer *shm1) {
-    FILE *fp = fopen(INPUT_FILE, "r");
-    if (!fp) {
-        perror("readerProcess: error opening input file");
-        exit(EXIT_FAILURE);
-    }
+static void reader_process(SharedBuffer *out) {
+  FILE *fp = fopen(g_input_path, "r");
+  if (!fp) {
+    perror("reader fopen");
+    buffer_signal_done(out);
+    exit(EXIT_FAILURE);
+  }
 
-    int index = 0;
-    int c;
-    while ((c = fgetc(fp)) != EOF) {
-        // Ensure there is room in the buffer.
-        if (index >= BUF_SIZE - 10) {
-            fprintf(stderr, "readerProcess: Buffer overflow, stopping input.\n");
-            break;
-        }
+  int ch;
+  const char *marker = EOL_MARKER;
+  size_t marker_len = strlen(marker);
 
-        if (c == '\n') {
-            // Insert "<EOL>" instead of newline.
-            const char *eol = "<EOL>";
-            int len = strlen(eol);
-            if (index + len >= BUF_SIZE) {
-                fprintf(stderr, "readerProcess: Not enough buffer space for <EOL>.\n");
-                break;
-            }
-            strcpy(&shm1->buffer[index], eol);
-            index += len;
-        } else {
-            shm1->buffer[index++] = (char)c;
-        }
+  while ((ch = fgetc(fp)) != EOF) {
+    if (ch == '\n') {
+      for (size_t i = 0; i < marker_len; i++) {
+        buffer_push(out, marker[i]);
+      }
+    } else {
+      buffer_push(out, (char)ch);
     }
-    // Null-terminate the string.
-    shm1->buffer[index] = '\0';
-    // Signal that reading is done.
-    shm1->done = 1;
-    fclose(fp);
+  }
+
+  fclose(fp);
+  buffer_signal_done(out);
 }
 
-/**
- * transformerProcess:
- *   Waits until the reader process is finished (shm1->done is set).
- *   Reads from shared memory shm1.
- *   Replaces every occurrence of adjacent asterisks "**" with a single '#'.
- *   Writes the transformed text into shared memory shm2.
- */
-void transformerProcess(SharedBuffer *shm1, SharedBuffer *shm2) {
-    // Wait until the reader process has completed its work.
-    while (!shm1->done) {
-        usleep(1000);  // Sleep for 1 ms to reduce busy waiting.
+static void transformer_process(SharedBuffer *in, SharedBuffer *out) {
+  char prev = '\0';
+  char ch;
+
+  while (buffer_pop(in, &ch)) {
+    if (prev == '*') {
+      if (ch == '*') {
+        buffer_push(out, '#');
+        prev = '\0';
+        continue;
+      }
+      buffer_push(out, prev);
+      prev = ch;
+      continue;
     }
 
-    int in = 0;    // Index for reading from shm1.
-    int out = 0;   // Index for writing to shm2.
-
-    while (shm1->buffer[in] != '\0') {
-        // Check for adjacent asterisks.
-        if (shm1->buffer[in] == '*' && shm1->buffer[in + 1] == '*') {
-            shm2->buffer[out++] = '#';
-            in += 2;  // Skip both asterisks.
-        } else {
-            shm2->buffer[out++] = shm1->buffer[in++];
-        }
-        if (out >= BUF_SIZE - 1) {
-            fprintf(stderr, "transformerProcess: Buffer overflow, stopping transformation.\n");
-            break;
-        }
+    if (ch == '*') {
+      prev = ch;
+    } else {
+      buffer_push(out, ch);
     }
-    // Null-terminate the transformed output.
-    shm2->buffer[out] = '\0';
-    // Signal that transformation is complete.
-    shm2->done = 1;
+  }
+
+  if (prev == '*') {
+    buffer_push(out, prev);
+  }
+
+  buffer_signal_done(out);
 }
 
-/**
- * printerProcess:
- *   Waits until the transformer process is finished (shm2->done is set).
- *   Reads from shared memory shm2.
- *   Prints the text to standard output in lines of exactly 20 characters.
- */
-void printerProcess(SharedBuffer *shm2) {
-    // Wait until the transformer has finished processing.
-    while (!shm2->done) {
-        usleep(1000);  // Sleep for 1 ms.
-    }
+static void printer_process(SharedBuffer *in) {
+  int count = 0;
+  char ch;
 
-    int count = 0;
-    for (int i = 0; shm2->buffer[i] != '\0'; i++) {
-        putchar(shm2->buffer[i]);
-        count++;
-        if (count == LINE_WIDTH) {
-            putchar('\n');
-            count = 0;
-        }
+  while (buffer_pop(in, &ch)) {
+    putchar(ch);
+    count++;
+    if (count == g_line_width) {
+      putchar('\n');
+      count = 0;
     }
-    // If there are remaining characters, end with a newline.
-    if (count > 0) {
-        putchar('\n');
+  }
+
+  if (count > 0) {
+    putchar('\n');
+  }
+}
+
+static void buffer_init(SharedBuffer *buffer) {
+  buffer->head = 0;
+  buffer->tail = 0;
+  buffer->count = 0;
+  buffer->done = 0;
+
+  if (sem_init(&buffer->mutex, 1, 1) == -1 ||
+      sem_init(&buffer->items, 1, 0) == -1 ||
+      sem_init(&buffer->spaces, 1, BUF_SIZE) == -1) {
+    perror("sem_init");
+    exit(EXIT_FAILURE);
+  }
+}
+
+static void buffer_destroy(SharedBuffer *buffer) {
+  sem_destroy(&buffer->mutex);
+  sem_destroy(&buffer->items);
+  sem_destroy(&buffer->spaces);
+}
+
+static void buffer_push(SharedBuffer *buffer, char ch) {
+  safe_sem_wait(&buffer->spaces);
+  safe_sem_wait(&buffer->mutex);
+
+  buffer->data[buffer->tail] = ch;
+  buffer->tail = (buffer->tail + 1) % BUF_SIZE;
+  buffer->count++;
+
+  safe_sem_post(&buffer->mutex);
+  safe_sem_post(&buffer->items);
+}
+
+static bool buffer_pop(SharedBuffer *buffer, char *out) {
+  safe_sem_wait(&buffer->items);
+  safe_sem_wait(&buffer->mutex);
+
+  if (buffer->count == 0 && buffer->done) {
+    safe_sem_post(&buffer->mutex);
+    return false;
+  }
+
+  *out = buffer->data[buffer->head];
+  buffer->head = (buffer->head + 1) % BUF_SIZE;
+  buffer->count--;
+
+  safe_sem_post(&buffer->mutex);
+  safe_sem_post(&buffer->spaces);
+  return true;
+}
+
+static void buffer_signal_done(SharedBuffer *buffer) {
+  safe_sem_wait(&buffer->mutex);
+  buffer->done = 1;
+  safe_sem_post(&buffer->mutex);
+  safe_sem_post(&buffer->items);
+}
+
+static void safe_sem_wait(sem_t *sem) {
+  while (sem_wait(sem) == -1) {
+    if (errno == EINTR) {
+      continue;
     }
+    perror("sem_wait");
+    exit(EXIT_FAILURE);
+  }
+}
+
+static void safe_sem_post(sem_t *sem) {
+  if (sem_post(sem) == -1) {
+    perror("sem_post");
+    exit(EXIT_FAILURE);
+  }
+}
+
+static void wait_for_child(pid_t pid) {
+  while (waitpid(pid, NULL, 0) == -1) {
+    if (errno == EINTR) {
+      continue;
+    }
+    perror("waitpid");
+    break;
+  }
+}
+
+static int parse_positive_int(const char *text, const char *label,
+                              int *value_out) {
+  char *end = NULL;
+  errno = 0;
+  long value = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || value <= 0 ||
+      value > INT_MAX) {
+    fprintf(stderr, "Invalid %s: %s\n", label, text);
+    return -1;
+  }
+  *value_out = (int)value;
+  return 0;
 }

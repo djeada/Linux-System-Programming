@@ -1,45 +1,78 @@
-# Linux Programming
+# Linux System Programming
 
-Welcome to the **Linux Programming** repository! This resource offers a comprehensive collection of notes, tutorials, and reference materials on Linux system programming.
+A hands-on repository of Linux system programming labs, notes, and quizzes. Each lab focuses on a core OS concept (processes, threads, synchronization, IPC) with clear student-facing instructions and reference implementations in modern C.
 
 ![linux_system_programming](https://github.com/user-attachments/assets/f3e18e63-7e2c-4705-b400-37fa533f6d35)
 
-## Introduction
+## Repository Layout
 
-Linux system programming involves interacting directly with the kernel, managing hardware resources, and developing low-level applications. This repository aims to be your go-to resource for understanding these concepts, blending theoretical insights with practical examples.
+- `labs/` - programming assignments with `main.c` and lab-specific `README.md`
+- `notes/` - course notes and reference materials
+- `quizzes/` - quick checks and practice questions
+- `LICENSE` - MIT license
 
-## Tutorials and Guides
+## Labs Overview
 
-Explore our curated tutorials and step-by-step guides on topics such as:
+| Lab | Topic | Core Concepts |
+| --- | --- | --- |
+| lab1 | Maze Navigator | signals, timeouts, input handling |
+| lab2 | Forked File Reader | `fork`, independent file I/O |
+| lab3 | Mini Shell | parsing, `fork`, `execvp`, `waitpid` |
+| lab4 | Sleeping Barber | shared memory, semaphores, IPC |
+| lab5 | Text Pipeline | multi-process pipeline, shared buffers |
+| lab6 | Parking Garage | synchronization policy, fairness |
+| lab7 | Thread Pool | worker threads, work queues |
+| lab8 | Restaurant Simulation | producers/consumers, reporting |
 
-- **Kernel Development:** Dive into the inner workings of the Linux kernel.
-- **Device Drivers:** Learn how to write and manage device drivers.
-- **System Calls & Interrupts:** Understand the mechanisms that allow user-space applications to interact with the kernel.
-- **Memory Management & Scheduling:** Discover how Linux manages memory and processes.
-- **Process & Thread Management:** Get hands-on with the creation, synchronization, and management of processes and threads.
+## Getting Started
 
-Each tutorial is designed to simplify complex topics with clear explanations, code examples, and exercises.
+**Prerequisites**
 
-## References
+- Linux or Unix-like environment
+- C compiler (`gcc`/`clang`)
+- POSIX threads and semaphores support
 
-Here are some valuable external resources to further enhance your learning:
+**General Build Pattern**
+
+Most labs follow the same structure (see each lab README for exact commands):
+
+```sh
+cd labs/labX
+cc -std=c11 -Wall -Wextra -pedantic -o labX main.c -pthread
+./labX [args]
+```
+
+## Conventions
+
+- Code is written in C11 (no C++).
+- Use `-Wall -Wextra -pedantic` for strict builds.
+- Threaded labs require `-pthread`.
+- Each lab README includes constraints, APIs, and example usage.
+
+## Resources
+
+**Books and References**
 
 - [Operating Systems: Three Easy Pieces](https://pages.cs.wisc.edu/~remzi/OSTEP/)
-- [OSDev Wiki - Expanded Main Page](https://wiki.osdev.org/Expanded_Main_Page)
-- [Writing a Kernel - Part 1](https://seds.nl/posts/writting-a-kernel-part-1/?fbclid=IwAR0RLHoJuBB5m5uyJbnKxw23TMy1tbtqu9R05kf5Q9uqXWyn2Ggx6m9kmj4)
-- [Operating Systems Course Notes](https://www.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/?fbclid=IwAR0J_WHndmlVf1mU3olHCCoHPz2tqnDzpGUw-H_qoha0U6NeY7U7lX96SBs)
 - [Little OS Book](https://github.com/cstack/littleosbook)
-- [Linux Kernel Programming Playlist by Indronil Banerjee](https://www.youtube.com/watch?v=p-vqh0KBtHM&list=PLysdvSvCcUhbrU3HhGhfQVbhjnN9GXCq4&ab_channel=IndronilBanerjee)
+- [OSDev Wiki](https://wiki.osdev.org/Expanded_Main_Page)
+
+**Courses and Notes**
+
+- [Operating Systems Course Notes (UIC)](https://www.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/)
+- [SOP2015 Operating Systems Course](https://mw.home.amu.edu.pl/zajecia/SOP2015/SOP.html)
+
+**Videos and Playlists**
+
+- [Linux Kernel Programming Playlist](https://www.youtube.com/watch?v=p-vqh0KBtHM&list=PLysdvSvCcUhbrU3HhGhfQVbhjnN9GXCq4)
 - [Additional Linux Programming Videos](https://www.youtube.com/watch?v=TB65-Kz8XvA&list=PLLqzlB47zvqiGOpRpwLQ3T13jHDOn7Mo-)
-- [SOP2015 - Operating Systems Course](https://mw.home.amu.edu.pl/zajecia/SOP2015/SOP.html)
-- [Comprehensive YouTube Playlist](https://youtube.com/playlist?list=PLsoEMNGAqtDOwDnR1W2AuTX79_iKPXRT7&si=sRWAyJ34BNxUsS1f)
-- [Berkeley Linux Programming Playlist](https://youtube.com/playlist?list=PL6CdojO56mZ3SeRfpzMBMObSnTziA0gfE&si=FYQNwrOldvH6ozwr)
+- [Comprehensive OS Playlist](https://youtube.com/playlist?list=PLsoEMNGAqtDOwDnR1W2AuTX79_iKPXRT7)
+- [Berkeley Linux Programming Playlist](https://youtube.com/playlist?list=PL6CdojO56mZ3SeRfpzMBMObSnTziA0gfE)
 
 ## Contributing
 
-Contributions are welcome! If you have suggestions, additional resources, or improvements, please submit a pull request or open an issue.
+Contributions are welcome. If you add new labs or improve existing ones, keep the same structure and include a concise lab README with objectives, constraints, and build/run steps.
 
 ## License
 
-This repository is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
-
+Licensed under the MIT License. See `LICENSE` for details.

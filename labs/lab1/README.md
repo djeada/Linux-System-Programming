@@ -1,69 +1,57 @@
 **Maze Navigator Challenge**
 
-**Objective:**  
-Develop a console-based maze navigation game where the player must find a path from the starting point to the exit. The maze layout is provided to the program via a command-line argument (e.g., a filename containing the maze data). Your task is to implement user input handling, timed responses, hints, and a cheat mode to assist the player.
+**Objective**  
+Implement a console-based maze navigation game in C. The player must move from the start (`S`) to the exit (`E`) using timed input, hints for invalid moves, and a cheat mode.
 
-**Game Overview:**
+**What You Must Implement**
 
-- **Maze Setup:**  
-  - The maze is defined in an external file passed as a command-line argument.
-  - The file contains a grid representation where walls, paths, the start point, and the exit are specified.
-  - At the start of the game, only the player’s current location is visible; the rest of the maze remains hidden until discovered.
+1. **Command-line input**  
+   - The program accepts a single argument: the maze file path.
+   - The file describes a rectangular maze with consistent row lengths.
 
-- **Player Movement:**  
-  - The player can move using simple commands (for example: `W` for up, `A` for left, `S` for down, and `D` for right).
-  - After each move, update and display the maze, revealing the new cell and any adjacent cells that have been "discovered" as a result of the move.
+2. **Maze parsing**  
+   - Load the maze into a 2D array.
+   - Track which cells are hidden vs. revealed.
+   - Validate that there is exactly one `S` and at least one `E`.
 
-- **Invalid Moves and Hints:**  
-  - If the player attempts to move into a wall or outside the maze boundaries, the move is not executed.
-  - For each invalid move, the program will automatically reveal one adjacent cell (a “safe” cell) as a hint to help the player progress.
+3. **Movement**  
+   - Use `W`, `A`, `S`, `D` (case-insensitive).
+   - Reject moves into walls (`#`) or outside the maze.
+   - After a valid move, reveal the current cell and its four neighbors.
 
-- **Timed Input:**  
-  - The program enforces a response time limit of 5 seconds per move.
-  - If the player does not input a command within 5 seconds, an alarm (audible alert or on-screen message) is triggered, reminding the player to make a move.
+4. **Invalid move hint**  
+   - If the move is invalid, reveal one adjacent unrevealed safe cell as a hint.
 
-- **Handling Repeated Inputs:**  
-  - If the player attempts the same move repeatedly, the maze display is reprinted without changing the game state.
-  - Ensure that repeated commands do not negatively affect the game progression or timing.
+5. **Timed input**  
+   - Start a 5-second timer before each prompt.
+   - If no input arrives within 5 seconds, print a reminder and keep the game running.
 
-- **Cheat Mode:**  
-  - If the player presses **Ctrl + Z** at any point, the game will reveal one additional hidden section of the maze.
-  - This cheat mode should only reveal cells that are part of the safe path, not the entire maze layout.
+6. **Cheat mode**  
+   - `Ctrl+Z` reveals one random safe hidden cell.
 
-- **Game Termination:**  
-  - The game continues until the player successfully navigates from the start point to the exit.
-  - Alternatively, if the maze becomes fully revealed (for instance, after too many incorrect moves or hints), the game will end and display the complete maze layout.
+7. **Game end conditions**  
+   - Reaching `E` ends the game with a success message.
+   - If the maze becomes fully revealed, the game ends and shows the maze.
 
-**Implementation Requirements:**
+**Maze File Format**
 
-1. **Command-Line Input:**  
-   - Your program must accept a maze layout file as a command-line argument.
-   - Parse the file to build an internal representation of the maze.
+- `#` wall  
+- `S` start (exactly one)  
+- `E` exit (at least one)  
+- Any other character is open path  
+- All rows must have the same length
 
-2. **User Interface and I/O:**  
-   - Use standard input/output for interaction.
-   - Clearly display the maze after every move, highlighting the player's current position and any revealed cells.
-   - Provide concise messages for valid moves, invalid moves, hints, and alarms.
+**Hints**
 
-3. **Timing Mechanism:**  
-   - Implement a timer that starts with each prompt.
-   - Trigger an alarm if no input is received within the 5-second window.
+- Use two 2D arrays: one for the maze, one for revealed cells.
+- Validate input early and fail fast if the file is malformed.
+- Use `alarm()` and a `SIGALRM` handler for timing.
+- Clear the screen before each redraw so the maze looks stable.
+- Keep your code modular: parsing, display, input, movement, hints, and signals should be separate functions.
 
-4. **Robustness and Error Handling:**  
-   - Ensure your program gracefully handles invalid inputs and repeated commands.
-   - Validate movement commands and handle edge cases (e.g., moving out of bounds).
+**Build and Run**
 
-5. **Modular Code Structure:**  
-   - Organize your code into functions/modules for tasks such as maze parsing, display updates, input handling, timing, and cheat mode activation.
-   - Include comments and documentation for clarity.
-
-**Additional Considerations:**
-
-- **Maze Representation:**  
-  Decide on an efficient way to represent the maze (e.g., a 2D array or vector) and how you will manage the "hidden" vs. "revealed" cells.
-
-- **User Experience:**  
-  Strive to create an intuitive interface that clearly communicates the game state and provides helpful feedback to the player.
-
-- **Testing:**  
-  Test your program with various maze layouts and user behaviors to ensure all features (movement, hints, timeouts, and cheat mode) work as intended.
+```sh
+cc -std=c11 -Wall -Wextra -pedantic -o lab1 main.c
+./lab1 maze.txt
+```
