@@ -1,95 +1,106 @@
 # Scheduling Algorithms
 
-Scheduling algorithms determine the order in which processes are executed by the CPU. Each algorithm has its own method of prioritizing tasks and optimizing various performance metrics such as waiting time, turnaround time, and overall system throughput. Here’s an overview of some common scheduling algorithms:
+CPU scheduling is about deciding who runs next when multiple processes are ready. Different algorithms trade off responsiveness, throughput, fairness, and predictability. There is no universal best choice, so operating systems pick policies that match their goals.
 
----
+A simple mental model is a ready queue and a CPU:
 
-## 1. First Come First Serve (FCFS)
+ready queue -> scheduler -> CPU -> I/O or done
 
-- **Description:**  
-  The simplest scheduling algorithm where processes are scheduled in the order of their arrival in the ready queue.
-- **Characteristics:**
-  - **Non-preemptive:** Once a process starts executing, it runs to completion.
-  - **Simple to implement.**
-  - **Drawback:** Can result in long waiting times for processes that arrive later (convoy effect).
+Below are common algorithms, what they prioritize, and where they shine.
 
----
+## First come, first served (FCFS)
 
-## 2. Shortest Job First (SJF)
+FCFS runs processes in arrival order and never preempts.
 
-- **Description:**  
-  Processes with the shortest CPU burst time are scheduled first.
-- **Characteristics:**
-  - **Non-preemptive:** Once a process is selected, it runs until completion.
-  - **Advantage:** Minimizes average waiting time if burst times are known.
-  - **Drawback:** Can lead to starvation for longer processes if shorter processes keep arriving.
+Timeline example (burst times in parentheses)
 
----
+P1(5) arrives, then P2(2), then P3(3)
 
-## 3. Shortest Remaining Time First (SRTF)
+CPU: P1 | P2 | P3
 
-- **Description:**  
-  The preemptive version of SJF. Processes are scheduled based on the shortest remaining CPU burst time.
-- **Characteristics:**
-  - **Preemptive:** A running process can be interrupted if a new process arrives with a shorter remaining time.
-  - **Advantage:** More responsive than SJF in dynamic environments.
-  - **Drawback:** Increased overhead due to frequent context switching.
+It is easy to implement but suffers from the convoy effect: one long job can delay many short ones.
 
----
+## Shortest job first (SJF)
 
-## 4. Round Robin (RR) Scheduling
+SJF chooses the process with the smallest next CPU burst. It minimizes average waiting time if burst lengths are known.
 
-- **Description:**  
-  Each process is assigned a fixed time slice (quantum) in a cyclic order.
-- **Characteristics:**
-  - **Preemptive:** Processes are preempted when their time quantum expires.
-  - **Fairness:** Provides a balanced approach for all processes.
-  - **Usage:** Ideal for time-sharing systems.
-  - **Note:** The performance is highly dependent on the chosen time quantum.
+CPU: P2(2) | P3(3) | P1(5)
 
----
+The downside is starvation: long jobs can wait indefinitely if short ones keep arriving.
 
-## 5. Priority-Based Scheduling (Non-Preemptive)
+## Shortest remaining time first (SRTF)
 
-- **Description:**  
-  Processes are scheduled based on their priority; the process with the highest priority is selected first. If two processes have the same priority, they are scheduled according to their arrival time.
-- **Characteristics:**
-  - **Non-preemptive:** Processes run to completion once selected.
-  - **Drawback:** Can lead to starvation for lower-priority processes if higher-priority processes continuously arrive.
-  - **Alternative:** A preemptive version exists where processes can be interrupted if a higher priority process becomes available.
+SRTF is the preemptive version of SJF. If a new job arrives with a shorter remaining time, it preempts the running job.
 
----
+Arrival example
 
-## 6. Highest Response Ratio Next (HRRN)
+Time 0: P1(8) starts
+Time 2: P2(3) arrives -> P1 preempted
+CPU: P1 | P2 | P1
 
-- **Description:**  
-  Processes are scheduled based on the highest response ratio, balancing waiting time and burst time to reduce starvation.
-- **Formula:**  
-  ```
-  Response Ratio = (Waiting Time + Burst Time) / Burst Time
-  ```
-- **Characteristics:**
-  - **Advantage:** Reduces the risk of starvation while considering both burst time and waiting time.
-  - **Usage:** Provides a more balanced approach in systems with diverse process workloads.
+It improves responsiveness for short jobs but adds context switch overhead.
 
----
+## Round robin (RR)
 
-## 7. Multilevel Queue Scheduling (MLQ)
+Round robin gives each process a fixed time slice and cycles through the ready queue.
 
-- **Description:**  
-  Processes are divided into multiple queues based on specific criteria such as priority or process type.
-- **Characteristics:**
-  - **Fixed Assignment:** Processes are permanently assigned to a queue based on their attributes.
-  - **Hierarchical:** Higher priority queues are always scheduled before lower priority queues.
-  - **Drawback:** Lack of flexibility; processes cannot move between queues.
+Quantum = 2
+CPU: P1 | P2 | P3 | P1 | P2 | ...
 
----
+Small quantum improves responsiveness but increases overhead. Large quantum behaves more like FCFS.
 
-## 8. Multilevel Feedback Queue Scheduling (MLFQ)
+## Priority scheduling
 
-- **Description:**  
-  An advanced version of MLQ that allows processes to move between queues based on their behavior and CPU burst characteristics.
-- **Characteristics:**
-  - **Dynamic Adjustment:** Processes that consume too much CPU time are moved to a lower-priority queue.
-  - **Advantage:** Improves fairness and responsiveness by dynamically adapting to process behavior.
-  - **Usage:** Common in modern operating systems to balance system responsiveness and throughput.
+Priority scheduling runs the highest priority process first. It can be preemptive or non-preemptive.
+
+Priority level
+high: P3
+mid : P1
+low : P2
+
+CPU: P3 | P1 | P2
+
+Starvation is a risk for low priority processes. Aging is a common fix: priorities slowly increase the longer a process waits.
+
+## Highest response ratio next (HRRN)
+
+HRRN balances shortness and waiting by using a response ratio.
+
+Formula
+
+```
+response ratio = (waiting + burst) / burst
+```
+
+This favors short jobs but gradually boosts long-waiting jobs so they still run.
+
+## Multilevel queue (MLQ)
+
+MLQ splits processes into separate queues, often by type, and schedules queues by fixed priority.
+
+Example queues
+
+Q0 interactive
+Q1 batch
+Q2 background
+
+CPU always picks from the highest non-empty queue. The drawback is rigidity: a process usually cannot move between queues.
+
+## Multilevel feedback queue (MLFQ)
+
+MLFQ allows processes to move between queues based on behavior. CPU-hungry jobs drift down, interactive jobs float up.
+
+Queues from top to bottom
+Q0 -> Q1 -> Q2
+
+Typical rules
+
+- new jobs start in Q0
+- using a full time slice moves a job down
+- blocking for I/O can keep a job at the same level or move it up
+
+This adapts to workloads and provides good responsiveness without starving long jobs.
+
+## Choosing an algorithm
+
+Interactive systems prioritize responsiveness, so RR or MLFQ are common. Batch systems often favor throughput and can use FCFS or SJF-like policies. Real-time systems focus on deadlines and use dedicated real-time schedulers.

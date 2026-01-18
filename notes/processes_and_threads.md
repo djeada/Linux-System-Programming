@@ -1,99 +1,167 @@
 # Processes and Threads
 
-## 1. Process
+Processes and threads are the core units of work in an operating system. A process is a running program with its own private world. A thread is a smaller execution path inside that world. Knowing the difference explains why a browser can keep rendering while a download runs, and why a crash in one app does not take down the rest of the system.
 
-- **Definition:**  
-  A **process** is a program in execution. It maintains its own execution context, which includes a **program counter (PC)** indicating the address of the next instruction to execute.
+## Process
 
-- **Process Control Block (PCB):**  
-  Every process is represented by a PCB, a data structure that holds important information about the process, such as:
-  - Process state
-  - Register values
-  - Memory pointers
-  - I/O status information
+A process is a program in execution. It has its own address space, execution context, and resources. The OS tracks each process so it can pause, resume, and protect it.
 
----
+Typical process address space
 
-## 2. Process Scheduling
+high addresses
++------------------------+
+| stack                  |
+| (grows down)           |
++------------------------+
+| heap                   |
+| (grows up)             |
++------------------------+
+| data and bss           |
++------------------------+
+| code or text           |
+low addresses
 
-Process scheduling is the method by which the operating system determines which process in the ready queue should be executed next. The following metrics are commonly used in process scheduling:
+Process state flow
 
-1. **Arrival Time:**  
-   The time at which a process enters the ready queue.
+new -> ready -> running -> waiting -> ready -> terminated
 
-2. **Completion Time:**  
-   The time at which a process completes its execution.
+## Process control block (PCB)
 
-3. **Burst Time:**  
-   The amount of time required by a process for CPU execution.
+The PCB is the OS record for a process. It is the thing the scheduler actually moves around.
 
-4. **Turnaround Time:**  
-   The total time taken from process arrival to its completion.  
-   **Calculation:**  
-   ```
-   Turnaround Time = Completion Time - Arrival Time
-   ```
+- process id and state
+- program counter and register values
+- memory pointers and page tables
+- accounting info like CPU time
+- I/O status and open files
 
-5. **Waiting Time (WT):**  
-   The time a process spends waiting in the ready queue, excluding the time during which it is executing.  
-   **Calculation:**  
-   ```
-   Waiting Time = Turnaround Time - Burst Time
-   ```
+## Context switching
 
----
+A context switch is the moment the CPU stops running one process or thread and starts another. The OS saves the current CPU state into the PCB (or thread control block), then loads the next one.
 
-## 3. Threads
+Context switch sketch
 
-- **Definition:**  
-  A **thread** is a lightweight unit of CPU utilization that exists within a process. Threads allow a process to perform multiple tasks concurrently.
+CPU running P1
+save P1 regs -> PCB1
+load P2 regs <- PCB2
+CPU running P2
 
-- **Characteristics of Threads:**
-  - **Individual Resources:**  
-    Each thread has its own:
-    - Program counter
-    - Register set
-    - Stack
-  - **Shared Resources:**  
-    Threads within the same process share the following:
-    - Code section
-    - Data section
-    - Files
-    - Signals
+Switches are necessary but not free. They cost time and can flush caches, so schedulers try to avoid excessive switching.
 
----
+## Scheduling basics
 
-## 4. Creating Threads and Processes
+Scheduling decides which ready process gets the CPU next. Most policies measure or compute a few common times:
 
-- **Forking:**  
-  A new thread or child process can be created using the `fork()` system call.  
-  - **Note:**  
-    If a process makes `n` calls to `fork()`, it can generate up to `2^n - 1` child processes.
+- arrival time: when the process enters the ready queue
+- burst time: how long it needs on the CPU
+- completion time: when it finishes
+- turnaround time: completion time minus arrival time
+- waiting time: turnaround time minus burst time
 
----
+Formulas
 
-## 5. Types of Threads
+```
+turnaround = completion - arrival
+waiting = turnaround - burst
+```
 
-There are two primary types of threads:
+Example
 
-1. **User Threads:**
-   - Implemented at the user level (via user libraries).
-   - Managed by the application rather than the kernel.
+Process A arrives at time 0, bursts for 5, completes at time 8
+Process B arrives at time 1, bursts for 3, completes at time 4
 
-2. **Kernel Threads:**
-   - Managed directly by the operating system.
-   - The OS handles scheduling and execution, often resulting in better performance and resource management.
+Turnaround(A) = 8 - 0 = 8, waiting(A) = 8 - 5 = 3
+Turnaround(B) = 4 - 1 = 3, waiting(B) = 3 - 3 = 0
 
----
+This is why short jobs often feel faster, even if they start later.
 
-## 6. Multilevel Feedback Queue (MLFQ) Scheduling
+## Thread
 
-- **Overview:**  
-  MLFQ is a dynamic scheduling algorithm designed to optimize process scheduling based on CPU burst characteristics.
+A thread is a lightweight execution path inside a process. Threads share the same address space but keep their own execution context.
 
-- **Key Features:**
-  - **Queue Movement:**  
-    Processes can move between different priority queues depending on their CPU usage.
-  - **Priority Adjustment:**  
-    If a process uses excessive CPU time, it is moved to a lower-priority queue, allowing shorter or less CPU-intensive processes to execute more promptly.
+Shared vs private
 
+process
+  code + data + heap + files
+  |          |          |
+  thread 1   thread 2   thread 3
+  pc/regs    pc/regs    pc/regs
+  stack      stack      stack
+
+Threads are used for responsiveness, throughput, and clean separation of tasks. A web server, for example, might use one thread per connection.
+
+## Process vs thread overhead
+
+Processes are heavier because they have separate address spaces and more kernel bookkeeping. Threads are lighter because they share memory inside one process.
+
+Typical tradeoffs
+
+- processes: stronger isolation, higher creation and switch cost
+- threads: cheaper creation, easy sharing, but bugs can corrupt shared state
+
+## Creating processes and threads
+
+On Unix-like systems, fork creates a new process by duplicating the parent. The new child often calls exec to replace its memory with a new program.
+
+If a program calls fork n times, the total number of processes becomes 2^n, so the number of new child processes created is 2^n - 1.
+
+Threads are created with libraries or system calls such as pthread_create in POSIX systems. They start inside the same process and share its memory.
+
+## Types of threads
+
+- user threads: managed by user libraries, the kernel may see only one process
+- kernel threads: managed and scheduled by the OS kernel
+
+Real systems often use a mix so the kernel can schedule threads while a user library manages policies.
+
+## Threading models
+
+There are a few ways user threads map to kernel threads.
+
+1:1 model
+user thread -> kernel thread
+
+N:1 model
+many user threads -> one kernel thread
+
+M:N model
+many user threads -> many kernel threads
+
+The 1:1 model is common today because it gives true parallelism on multicore CPUs.
+
+## Inter-process communication (IPC)
+
+Processes need ways to exchange data safely.
+
+Common IPC tools
+
+- pipes: one-way byte streams between related processes
+- sockets: bidirectional communication across processes or machines
+- shared memory: fast, but needs synchronization
+- message queues: structured messages with OS-managed buffering
+
+IPC picture
+
+Process A -> pipe -> Process B
+Process A <-> socket <-> Process B
+
+## Multilevel feedback queue (MLFQ) scheduling
+
+MLFQ adapts to behavior. Short, interactive jobs stay near the top and get quick service. CPU-heavy jobs drift downward.
+
+Priority queues
+
+Q0 highest -> Q1 -> Q2 lowest
+
+Typical behavior
+
+- a job starts in Q0 with a short time slice
+- if it uses the whole slice, it moves down
+- if it blocks for I/O, it may stay or move up
+
+Example idea
+
+interactive shell: short bursts, stays near Q0
+video encoder: long bursts, drifts toward Q2
+
+The result is better responsiveness for interactive tasks without starving long ones.

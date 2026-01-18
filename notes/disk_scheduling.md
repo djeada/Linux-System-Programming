@@ -1,110 +1,112 @@
 # Disk Scheduling
 
-Disk scheduling is the process by which an operating system orders disk I/O requests to optimize performance. Since disk access involves mechanical movement (such as moving the read/write head), minimizing delays through efficient scheduling is crucial.
+Disk scheduling is about deciding the order of disk I/O requests so the read/write head does not waste time moving around. On spinning disks, head movement is slow compared to CPU speed, so good scheduling can make the whole system feel faster.
 
----
+Think of a disk like a long hallway of tracks. Moving the head costs time, and the scheduler tries to minimize that travel.
 
-## Disk Access Parameters
+Tracks: 0 ------------------------------------------ 199
 
-1. **Seek Time:**  
-   The time taken to move the disk’s read/write head to the track where the desired data is located.
+## Disk access parameters
 
-2. **Rotational Latency:**  
-   The time it takes for the desired sector of the disk to rotate into position under the read/write head.
+- seek time: time to move the head to the target track
+- rotational latency: time for the right sector to spin under the head
+- transfer time: time to actually read or write the data
+- access time: seek + rotation + transfer
+- response time: how long a request waits in the queue
 
-3. **Transfer Time:**  
-   The time required to transfer the data once the head is in position. This depends on the disk’s rotational speed and the size of the data.
+Formula
 
-4. **Disk Access Time:**  
-   The total time required to access data, calculated as:  
-   ```
-   Disk Access Time = Seek Time + Rotational Latency + Transfer Time
-   ```
+```
+access time = seek + rotation + transfer
+```
 
-5. **Disk Response Time:**  
-   The average time a disk request waits before being serviced. It is computed as the average of the waiting times for all requests in the disk queue.
+## Scheduling algorithms
 
----
+To compare algorithms, imagine a head starting at track 50 with requests at:
 
-## Disk Scheduling Algorithms
+10, 20, 35, 55, 70, 90, 150
 
-Different algorithms optimize disk scheduling in various ways:
+### First come, first served (FCFS)
 
-### 1. First-Come, First-Served (FCFS)
+Serve requests in arrival order. Simple and fair, but can cause long head movement.
 
-- **Description:**  
-  Requests are processed in the exact order in which they arrive in the disk queue.
+Head path (arrival order)
+50 -> 10 -> 90 -> 20 -> 150 -> 35 -> 70 -> 55
 
-- **Advantages:**  
-  - Simple to implement.  
-  - Fair in terms of arrival order.
+Good for fairness, not great for performance.
 
-- **Drawbacks:**  
-  - May result in long wait times if requests are spread across distant areas of the disk.
+### Shortest seek time first (SSTF)
 
----
+Always go to the closest request from the current head position.
 
-### 2. Shortest Seek Time First (SSTF)
+Head path (one possible)
+50 -> 55 -> 70 -> 90 -> 35 -> 20 -> 10 -> 150
 
-- **Description:**  
-  The scheduler selects the request that requires the least movement (i.e., the shortest seek time) from the current head position.
+This reduces total movement but can starve far requests if new nearby requests keep arriving.
 
-- **Advantages:**  
-  - Reduces overall seek time.
-  
-- **Drawbacks:**  
-  - Can lead to starvation for requests that are far from the current head position.
+### SCAN (elevator)
 
----
+Move in one direction servicing requests, then reverse at the end.
 
-### 3. SCAN (Elevator Algorithm)
+If moving upward:
+50 -> 55 -> 70 -> 90 -> 150 -> reverse -> 35 -> 20 -> 10
 
-- **Description:**  
-  The disk arm moves in one direction, servicing all requests along its path. Upon reaching the last request in that direction, it reverses and services requests on the return path.
+Wait times are more predictable than FCFS.
 
-- **Advantages:**  
-  - Provides a more uniform wait time compared to FCFS.
-  
-- **Drawbacks:**  
-  - Requests at the extreme ends of the disk may experience longer wait times.
+### C-SCAN (circular SCAN)
 
----
+Like SCAN, but only service in one direction. When the head reaches the end, it jumps back without servicing.
 
-### 4. C-SCAN (Circular SCAN)
+50 -> 55 -> 70 -> 90 -> 150 -> jump -> 10 -> 20 -> 35
 
-- **Description:**  
-  Similar to SCAN, but the disk arm only services requests in one direction. When it reaches the end of the disk, it quickly returns to the beginning without servicing requests during the return, and then resumes servicing in the same direction.
+This gives a more uniform wait time across tracks.
 
-- **Advantages:**  
-  - Ensures a more uniform wait time by preventing the head from biasing toward one end of the disk.
-  
-- **Drawbacks:**  
-  - The return movement is unserviced, which can be considered wasted time.
+### LOOK
 
----
+LOOK is SCAN but it only goes as far as the last request in each direction, not the physical end of disk.
 
-### 5. LOOK
+50 -> 55 -> 70 -> 90 -> 150 -> reverse -> 35 -> 20 -> 10
 
-- **Description:**  
-  A variant of SCAN. Instead of going to the physical end of the disk, the arm only travels as far as the last request in its current direction before reversing.
+Saves travel when the queue does not reach the extreme ends.
 
-- **Advantages:**  
-  - Reduces unnecessary movement, potentially lowering wait times.
-  
-- **Drawbacks:**  
-  - May slightly vary in performance depending on the distribution of requests.
+### C-LOOK
 
----
+C-LOOK is the circular version of LOOK. It goes to the last request in one direction, then jumps to the first request on the other side.
 
-### 6. C-LOOK (Circular LOOK)
+50 -> 55 -> 70 -> 90 -> 150 -> jump -> 10 -> 20 -> 35
 
-- **Description:**  
-  A variant of C-SCAN. The disk arm goes only as far as the last request in one direction and then immediately jumps back to the first request on the other end, instead of traversing to the very end of the disk.
+This reduces unnecessary movement while keeping wait times fairly even.
 
-- **Advantages:**  
-  - Further minimizes unnecessary traversal.
-  - Provides a uniform wait time by ensuring that requests are handled in a circular fashion.
-  
-- **Drawbacks:**  
-  - Slightly more complex to implement compared to basic SCAN.
+## HDD vs SSD
 
+The algorithms above were designed for spinning disks. SSDs have no moving head, so seek time and rotational latency are almost zero. On SSDs, the goals shift toward throughput, fairness, and write amplification.
+
+HDD costs
+seek + rotation dominate
+
+SSD costs
+controller queues and flash erase blocks dominate
+
+## Request merging and reordering
+
+Schedulers also try to merge nearby requests to reduce overhead.
+
+Adjacent requests
+[block 100] [block 101] [block 102]
+merge -> [block 100..102]
+
+This is useful on both HDDs and SSDs because it reduces per-request overhead.
+
+## Modern I/O schedulers
+
+Linux and other OSes offer multiple I/O schedulers tuned for different workloads.
+
+- noop: minimal reordering, good for SSDs or hardware RAID
+- deadline: limits how long requests can wait to reduce latency spikes
+- cfq or bfq: fair sharing across processes and cgroups
+
+Choosing the right scheduler depends on the storage device and whether you care more about latency or throughput.
+
+## When each is used
+
+FCFS is simple but rarely optimal. SSTF gives good throughput but can starve. SCAN and LOOK are balanced choices for general workloads. C-SCAN and C-LOOK aim for fairness by keeping wait times uniform across the disk.

@@ -1,132 +1,167 @@
-
 # Memory Management
 
-Memory management techniques enable the efficient sharing and allocation of memory among multiple processes. This section covers various methods for managing memory, including partitioning, paging, segmentation, and page replacement strategies.
+Memory management is the OS job of deciding what lives in RAM, where it lives, and for how long. It is part librarian, part traffic cop: keep the shelves organized, keep the CPU fed, and make sure programs do not stomp on each other.
 
-## 1. Memory Sharing Techniques
+This note walks through the main ideas, from early partitioning to paging and page replacement.
 
-### Overlays
-- **Concept:**  
-  Only the instructions and data needed at a given time are loaded into memory.
-- **Usage:**  
-  Used in environments with limited memory, ensuring that only a portion of a large program is resident in memory at any one time.
+## Memory sharing techniques
 
-### Swapping
-- **Concept:**  
-  In multiprogramming systems, processes that have used their allotted time slice are temporarily swapped out from main memory.
-- **Usage:**  
-  Helps in managing multiple processes by moving inactive processes to secondary storage and bringing them back when needed.
+Overlays
 
----
+Only the parts of a large program that are needed right now are loaded into memory. This was common when RAM was small.
 
-## 2. Memory Allocation Schemes
+Program view
+module A -> module B -> module C
 
-Memory can be allocated to processes using various partitioning schemes:
+Memory at one moment
++------------------+
+| OS               |
+| module B         |
+| free             |
++------------------+
 
-### a. Single Partition Allocation Scheme
-- **Description:**  
-  Memory is divided into two distinct parts:
-  - One part reserved for the operating system.
-  - The other part allocated to user processes.
+Swapping
 
-### b. Multiple Partition Allocation Schemes
-Memory is divided into partitions that can be either fixed or variable in size.
+When RAM is full, inactive processes can be moved to disk to free space. Later they are swapped back in.
 
-#### 1. Fixed Partitioning
-- **Description:**  
-  Memory is divided into fixed-size partitions.
-- **Characteristics:**  
-  - Simplicity in design.
-  - Can lead to internal fragmentation if a process does not fully utilize its partition.
+RAM            Disk
+[P1][P2][P3]   [P4][P5]
+   swap out P2 ---->
 
-#### 2. Variable Partitioning
-- **Description:**  
-  Memory is divided into partitions of variable sizes based on the size of the process.
-- **Allocation Strategies:**
+Swapping keeps many processes in the system, but it is slow because disks are slow.
 
-- **First Fit:**  
-  The arriving process is allocated to the first available memory hole in which it fits completely.
-  
-- **Best Fit:**  
-  The process is allocated to the smallest hole that is large enough, minimizing wasted space.  
-  *Note:* Best Fit does not always yield the most efficient memory utilization in practice.
-  
-- **Worst Fit:**  
-  The process is allocated to the largest available hole, leaving the maximum leftover space.
+## Memory allocation schemes
 
-> **Note:**  
-> Both fixed and variable partitioning require that each process be allocated a contiguous block of memory. This can lead to external fragmentation, which is why more advanced techniques like paging are often used.
+Single partition
 
----
+Memory is split into two regions: one for the OS and one for a single user process.
 
-## 3. Advanced Memory Management Techniques
+| OS | user process | free |
 
-### Paging
-- **Concept:**  
-  The physical memory is divided into fixed-size blocks called *frames*, and the logical memory is divided into fixed-size blocks called *pages*.  
-- **Key Point:**  
-  The size of a physical frame is equal to the size of a logical page, allowing non-contiguous memory allocation and reducing external fragmentation.
+Multiple partitions
 
-### Segmentation
-- **Concept:**  
-  Provides a logical view of memory where the address space is divided into segments (e.g., code, data, stack).  
-- **Implementation:**  
-  Segmentation can be used alone or in combination with paging to improve memory utilization and provide better support for varying process sizes.
-  
----
+Memory is split into many partitions. These can be fixed-size or variable-size.
 
-## 4. Page Faults
+Fixed partitions
 
-- **Definition:**  
-  A **page fault** is an interrupt triggered when a running program accesses a memory page that is mapped in the virtual address space but not currently loaded into physical memory.
-- **Handling:**  
-  When a page fault occurs, the operating system must locate the required page (possibly from secondary storage), load it into a free frame, and update the page table before resuming the program.
+| OS | P1 | P2 | P3 | free |
 
----
+This is simple but can waste space inside a partition if a process is smaller than the partition size. This is internal fragmentation.
 
-## 5. Page Replacement Algorithms
+Variable partitions
 
-When physical memory is full, the operating system must decide which page to remove to make room for a new page. The following are common page replacement algorithms:
+| OS | P1 | hole | P2 | hole | P3 |
 
-### 5.1 First In First Out (FIFO)
-- **Mechanism:**  
-  - Pages are maintained in a queue in the order they were loaded into memory.
-  - The oldest page (at the front of the queue) is selected for replacement when a new page is needed.
-- **Example:**  
-  Consider the page reference string `1, 3, 0, 3, 5, 6` with 3 page slots:
-  - **Step 1:** Pages `1`, `3`, and `0` are loaded into the empty slots → **3 page faults**.
-  - **Step 2:** The next `3` is already in memory → **0 page faults**.
-  - **Step 3:** When page `5` arrives, it replaces the oldest page (`1`) → **1 page fault**.
-  - **Step 4:** When page `6` arrives, it replaces the next oldest page (`3`) → **1 page fault**.
-- **Belady’s Anomaly:**  
-  FIFO can exhibit Belady’s anomaly, where increasing the number of page frames results in more page faults.  
-  *Example:* With a specific reference string, using 3 frames might result in 9 faults, but increasing to 4 frames could result in 10 faults.
+Here each process gets a block close to its size. Over time, holes appear between blocks. This is external fragmentation.
 
----
+Common placement strategies
 
-### 5.2 Optimal Page Replacement
-- **Mechanism:**  
-  - Replaces the page that will not be used for the longest period of time in the future.
-- **Characteristics:**  
-  - This algorithm is theoretical because it requires future knowledge of the page reference string.
-  - It is used as a benchmark to evaluate other page replacement algorithms.
-- **Example:**  
-  Consider the page reference string `7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2` with 4 page slots:
-  - **Step 1:** Pages `7`, `0`, `1`, `2` are loaded → **4 page faults**.
-  - **Step 2:** The next page `0` is already in memory → **0 page fault**.
-  - **Step 3:** Page `3` replaces `7` (as `7` is not needed for the longest time in the future) → **1 page fault**.
-  - **Step 4:** Continue this process by replacing the page that is not needed for the longest future period.
+- first fit: choose the first hole that is large enough
+- best fit: choose the smallest hole that is large enough
+- worst fit: choose the largest hole and leave a big remainder
 
----
+Compaction can reduce external fragmentation by sliding processes together, but it is expensive.
 
-### 5.3 Least Recently Used (LRU)
-- **Mechanism:**  
-  - Replaces the page that has not been used for the longest period of time.
-- **Characteristics:**  
-  - Assumes that pages used recently will likely be used again soon.
-- **Example:**  
-  For the page reference string `7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2` with 4 page slots:
-  - **Step 1:** Load `7`, `0`, `1`, `2` → **4 page faults**.
-  - **Step 2:** When page `3` arrives, it replaces page `7` (the least recently used) → **1 page fault**.
-  - **Step 3:** Continue this process by always replacing the page that has not been used for the longest time.
+## Paging
 
+Paging splits memory into fixed-size frames and splits a process into fixed-size pages. Pages can be placed into any free frame, so a process no longer needs one contiguous block.
+
+Logical pages -> physical frames
+
+page 0 -> frame 5
+page 1 -> frame 2
+page 2 -> frame 9
+
+Address translation uses a page table:
+
+virtual address = (page, offset)
+physical address = (frame, offset)
+
+Paging removes most external fragmentation but can leave a little internal fragmentation inside the last page.
+
+## Page tables and the TLB
+
+Each process has a page table that maps virtual pages to physical frames. Page table entries usually store more than the frame number.
+
+- present bit: is the page currently in RAM
+- dirty bit: has the page been modified
+- referenced bit: has the page been used recently
+- protection bits: read, write, execute permissions
+
+Looking up the page table for every memory access is slow, so CPUs cache recent translations in a small, fast table called the TLB.
+
+Address translation with a TLB
+
+CPU -> TLB hit -> frame -> RAM
+CPU -> TLB miss -> page table -> TLB update -> RAM
+
+Example address split
+
+Page size 4096 bytes
+Virtual address 12345
+page = 3, offset = 57
+
+The page table gives the frame number for page 3, and the offset stays the same.
+
+## Segmentation
+
+Segmentation divides a program by meaning: code, data, stack, heap. Each segment has its own size and grows independently.
+
+Segment table
+
+code  -> base 1000, limit 4k
+data  -> base 9000, limit 2k
+stack -> base 20000, limit 8k
+
+Segmentation matches how programmers think about memory, but it can still suffer from external fragmentation. Many systems combine segmentation and paging.
+
+## Page faults
+
+A page fault happens when a process references a page that is not in RAM. The OS must fetch it from disk, update the page table, and restart the instruction.
+
+Page fault flow
+
+1) CPU references page X
+2) page table says not present
+3) OS loads page X into a free frame
+4) page table updated, instruction retried
+
+Page faults are normal in a virtual memory system, but too many cause thrashing.
+
+## Thrashing and working sets
+
+If the system spends more time handling page faults than running useful work, it is thrashing. The CPU sits idle while the disk churns.
+
+CPU timeline
+run | fault | wait | fault | wait | run
+
+Working set is the set of pages a process is actively using over a short window of time. If the working set fits in RAM, page faults drop. If it does not, the process keeps evicting pages it will need again soon.
+
+One common fix is to reduce the number of active processes so each gets enough frames.
+
+## Page replacement algorithms
+
+When RAM is full, the OS must pick a page to evict.
+
+FIFO
+
+Evict the page that has been in memory the longest. Simple, but it can suffer from Belady's anomaly where more frames cause more faults.
+
+Example with 3 frames
+refs: 1 2 3 4 1 2
+frames after 1 2 3: [1 2 3]
+next 4 evicts 1 -> [4 2 3]
+
+Optimal
+
+Evict the page that will not be used for the longest time in the future. It is not implementable in real systems but is a useful benchmark.
+
+LRU
+
+Evict the page that has not been used for the longest time in the past. This approximates optimal behavior and is common in practice.
+
+LRU idea
+recently used -> keep
+long time ago -> evict
+
+No replacement policy is perfect. The right choice depends on workload, hardware support, and performance goals.

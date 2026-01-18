@@ -1,82 +1,147 @@
 # Synchronization Tools
 
-Synchronization tools are essential in concurrent programming to manage access to shared resources and prevent conflicts. Below are some key synchronization tools and concepts.
+Concurrency is powerful but risky. When two threads touch shared data at the same time, tiny timing shifts can corrupt state. Synchronization tools are the OS and programming patterns that keep shared resources safe, consistent, and fair.
 
----
+This note covers the most common tools and the deadlock risks that come with them.
 
-## 1. Semaphores
+## Semaphores
 
-A **semaphore** is a protected variable or an abstract data type used to control access to a shared resource by multiple processes. Its value indicates the status of the resource (e.g., whether it is available or in use).
+A semaphore is a protected counter with two atomic operations, often called wait (P) and signal (V). The count represents how many units of a resource are available.
 
-### Types of Semaphores
+Binary semaphore
 
-- **Binary Semaphores:**  
-  - **Value Range:** Can only take the values 0 or 1.  
-  - **Usage:** Primarily used to implement mutual exclusion and to synchronize concurrent processes.  
-  - **Example:** A binary semaphore can act as a simple lock, where `1` means the resource is available and `0` means it is locked.
+Value is 0 or 1. It behaves like a lock.
 
-- **Counting Semaphores:**  
-  - **Value Range:** Can take any non-negative integer value.  
-  - **Usage:** Useful when multiple instances of a resource are available. The semaphore's count represents the number of available resources.
+Counting semaphore
 
----
+Value is 0..N. It models N identical resources, such as a pool of database connections.
 
-## 2. Mutex
+Conceptual flow
 
-A **mutex** (mutual exclusion object) is a synchronization primitive that provides exclusive access to a shared resource:
+wait: if count > 0, decrement and enter
+      else block
+signal: increment and wake a waiter if needed
 
-- **Key Characteristics:**
-  - Only one thread or process can hold the mutex at any given time.
-  - When a thread acquires the mutex, it gains exclusive access to the associated resource (e.g., a buffer).  
-  - Other threads must wait until the mutex is released before they can access the resource.
-  
-- **Usage Scenario:**  
-  In a producer-consumer setup, when the producer is filling the buffer, the consumer must wait until the buffer is available, and vice versa. Although mutexes are a specific implementation of mutual exclusion, the general concept can also be achieved using semaphores.
+## Mutex
 
----
+A mutex is a mutual exclusion lock. Only one thread can hold it at a time, so it protects a critical section.
 
-## 3. Deadlocks
+Lock flow
 
-A **deadlock** occurs when a set of processes is blocked because each process is holding a resource and simultaneously waiting for another resource held by another process. This results in a standstill where none of the processes can proceed.
+thread A: lock -> critical section -> unlock
+thread B: waits until unlock
 
-### Necessary Conditions for Deadlock
+Mutexes are ideal for protecting single shared structures like a queue, a list, or a file handle.
 
-For a deadlock to occur, all the following conditions must hold simultaneously:
+## Condition variables
 
-1. **Mutual Exclusion:**  
-   - At least one resource must be non-sharable, meaning only one process can use it at a time.
+A condition variable lets threads sleep until a condition becomes true. It is always used with a mutex.
 
-2. **Hold and Wait:**  
-   - A process is holding at least one resource and is waiting to acquire additional resources that are currently held by other processes.
+Typical pattern
 
-3. **No Preemption:**  
-   - Resources cannot be forcibly removed from the processes holding them; they must be released voluntarily.
+lock(m)
+while condition is false:
+  wait(cond, m)
+do work
+unlock(m)
 
-4. **Circular Wait:**  
-   - A set of processes are waiting for each other in a circular chain (i.e., process A waits for process B, process B waits for process C, and so on, with the last process waiting for process A).
+Another thread does:
 
----
+lock(m)
+update condition
+signal(cond) or broadcast(cond)
+unlock(m)
 
-## 4. Handling Deadlocks
+Condition variables are good for producer-consumer style coordination without busy waiting.
 
-There are three primary strategies for managing deadlocks:
+## Spinlocks
 
-1. **Deadlock Prevention or Avoidance:**  
-   - The system is designed in such a way as to prevent the possibility of a deadlock by carefully allocating resources.
-  
-2. **Deadlock Detection and Recovery:**  
-   - The system allows deadlocks to occur, but then employs mechanisms to detect them and take corrective actions (such as preemption or resource rollback) to recover from the deadlock.
+A spinlock is a lock that waits by looping, repeatedly checking the lock until it becomes free.
 
-3. **Ignoring the Problem:**  
-   - If deadlocks are very rare, some operating systems (such as certain versions of Windows and UNIX) choose to ignore the issue and simply reboot the system when a deadlock occurs.
+spin: while locked, keep spinning
 
-### Banker's Algorithm
+Spinlocks are useful for very short critical sections on multicore CPUs, but they waste CPU time if held too long.
 
-- **Purpose:**  
-  Banker's Algorithm is a classic deadlock-avoidance method.
-  
-- **Concept:**  
-  It is analogous to a bank lending money: the bank only allocates funds in a manner that ensures it can still satisfy the needs of all its customers, thereby avoiding a situation where it runs out of cash.
-  
-- **Application:**  
-  Similarly, the algorithm checks whether granting a resource request will leave the system in a safe state. If the state is safe, the resources are allocated; otherwise, the process must wait.
+## Readers-writer locks
+
+Some data is read often and written rarely. A readers-writer lock allows multiple readers or one writer.
+
+R and W example
+
+R1 enters
+R2 enters
+W waits
+R1 leaves
+R2 leaves
+W enters
+
+The policy matters. Favoring readers can starve writers, and favoring writers can block readers.
+
+## Barriers
+
+A barrier makes a group of threads wait until everyone reaches the same point.
+
+Barrier idea
+
+T1 -> wait
+T2 -> wait
+T3 -> wait
+all arrive -> all proceed
+
+Barriers are common in parallel loops and simulation steps.
+
+## Example: producer and consumer
+
+One thread produces items, another consumes them. A mutex protects the buffer, and semaphores track empty and full slots.
+
+buffer slots: [ ][ ][ ]
+empty = 3, full = 0
+
+producer: wait(empty) -> lock -> add item -> unlock -> signal(full)
+consumer: wait(full)  -> lock -> remove item -> unlock -> signal(empty)
+
+This keeps the buffer consistent and prevents overfill or underflow.
+
+## Deadlock
+
+Deadlock happens when each process holds a resource and waits for another, forming a cycle. No one can move.
+
+Cycle example
+
+P1 holds R1, waits for R2
+P2 holds R2, waits for R1
+
+Four necessary conditions
+
+- mutual exclusion: some resources are non-shareable
+- hold and wait: a process holds one resource and waits for another
+- no preemption: resources cannot be forcibly taken
+- circular wait: there is a cycle of waiting
+
+If all four hold at once, deadlock is possible.
+
+## Livelock and starvation
+
+Deadlock is not the only failure mode.
+
+- livelock: threads keep reacting to each other but make no progress
+- starvation: a thread waits indefinitely because others keep winning
+
+Fair scheduling policies and bounded waiting reduce starvation risk.
+
+## Handling deadlocks
+
+- prevention or avoidance: structure the system so one condition cannot happen
+- detection and recovery: allow deadlocks, detect them, then recover
+- ignore: if deadlocks are rare, some systems accept the risk
+
+## Banker's algorithm
+
+Banker's algorithm is a classic avoidance technique. It only grants a request if the system stays in a safe state, meaning all processes could still finish in some order.
+
+Safe state idea
+
+Available: 3
+Needs: P1=2, P2=1, P3=3
+
+Granting P2 is safe because P2 can finish, release resources, and then others can finish.
