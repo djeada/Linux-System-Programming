@@ -1,5 +1,9 @@
 # Processes and Threads
 
+Continue the process-creation examples with [terminal job control](shells_and_terminals.md)
+and [managed service lifecycle](service_lifecycle.md). They give processes an
+explicit group, terminal, readiness, and shutdown protocol.
+
 Processes and threads are the core units of work in an operating system. A process is a running program with its own private world. A thread is a smaller execution path inside that world. Knowing the difference explains why a browser can keep rendering while a download runs, and why a crash in one app does not take down the rest of the system.
 
 ## Process
@@ -88,7 +92,7 @@ process
   pc/regs    pc/regs    pc/regs
   stack      stack      stack
 
-Threads are used for responsiveness, throughput, and clean separation of tasks. A web server, for example, might use one thread per connection.
+Threads are used for responsiveness, throughput, and clean separation of tasks. For reusable background work, start with a fixed worker pool and bounded queue, as in [lab7](../labs/lab7/README.md). For many mostly waiting connections, consider an event loop or bounded workers rather than an unlimited thread per connection.
 
 ## Process vs thread overhead
 
@@ -101,11 +105,25 @@ Typical tradeoffs
 
 ## Creating processes and threads
 
-On Unix-like systems, fork creates a new process by duplicating the parent. The new child often calls exec to replace its memory with a new program.
+For a direct external-program launch, [lab3](../labs/lab3/README.md) uses
+`posix_spawnp`, then checks the child status with `waitpid`. Its
+[fork/exec comparison](../labs/lab3/comparisons/fork_exec.c) makes custom child
+setup explicit. Both APIs remain current; choose according to the work.
 
-If a program calls fork n times, the total number of processes becomes 2^n, so the number of new child processes created is 2^n - 1.
+The forked-process labs have a single-threaded parent. A fork in a multithreaded
+process imposes async-signal-safety restrictions on child operations before an
+exec. Check failed forks, retry interrupted waits, and reap successfully started
+children before releasing shared mappings. Child branches use `_exit` after
+flushing intended output, so they do not run inherited parent cleanup.
 
-Threads are created with libraries or system calls such as pthread_create in POSIX systems. They start inside the same process and share its memory.
+If **every existing process** executes each of n successful fork calls, the total becomes 2^n. A parent-only loop that starts n children instead creates n + 1 processes; neither formula describes failed forks.
+
+Threads are created with `pthread_create` and joined with `pthread_join`.
+Arguments and shared state must outlive their workers. Pthread functions return
+an error number directly, rather than setting `errno`. Track the number actually
+started; on a partial startup failure, close work intake and join those workers.
+[Lab8](../labs/lab8/README.md) starts consumers before producers, uses a monotonic
+intake deadline, then joins every chef before reporting final completion.
 
 ## Types of threads
 
@@ -127,7 +145,7 @@ many user threads -> one kernel thread
 M:N model
 many user threads -> many kernel threads
 
-The 1:1 model is common today because it gives true parallelism on multicore CPUs.
+Linux POSIX threads use a 1:1 mapping to kernel-scheduled threads and can run in parallel on available cores. The N:1 and M:N diagrams are comparative threading models, not implementation instructions for these labs.
 
 ## Inter-process communication (IPC)
 
@@ -135,9 +153,9 @@ Processes need ways to exchange data safely.
 
 Common IPC tools
 
-- pipes: one-way byte streams between related processes
+- pipes: byte streams; close unused endpoints so EOF can propagate, and handle complete logical records
 - sockets: bidirectional communication across processes or machines
-- shared memory: fast, but needs synchronization
+- shared memory: avoids explicit message copies but still needs process-shared synchronization and ownership
 - message queues: structured messages with OS-managed buffering
 
 IPC picture
@@ -165,3 +183,12 @@ interactive shell: short bursts, stays near Q0
 video encoder: long bursts, drifts toward Q2
 
 The result is better responsiveness for interactive tasks without starving long ones.
+
+## Ownership in the lab implementations
+
+The [pattern guide](modern_c_patterns.md) separates current C/POSIX choices from
+API comparisons and OS theory. In [lab2](../labs/lab2/README.md), each process opens
+its input file after fork, obtaining independent file offsets. An inherited file
+descriptor instead refers to the same open-file description, whose offset can be
+shared by the parent and child. In [lab5](../labs/lab5/README.md), explicit buffer
+completion ends the stream; a failure in one process stops and reaps its peers.

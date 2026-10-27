@@ -1,3 +1,5 @@
+#include "../common/process.h"
+
 #include <errno.h>
 #include <limits.h>
 #include <semaphore.h>
@@ -32,7 +34,7 @@ static void reader_process(SharedBuffer *out);
 static void transformer_process(SharedBuffer *in, SharedBuffer *out);
 static void printer_process(SharedBuffer *in);
 
-static void buffer_init(SharedBuffer *buffer);
+static bool buffer_init(SharedBuffer *buffer);
 static void buffer_destroy(SharedBuffer *buffer);
 static void buffer_push(SharedBuffer *buffer, char ch);
 static bool buffer_pop(SharedBuffer *buffer, char *out);
@@ -40,7 +42,6 @@ static void buffer_signal_done(SharedBuffer *buffer);
 
 static void safe_sem_wait(sem_t *sem);
 static void safe_sem_post(sem_t *sem);
-static void wait_for_child(pid_t pid);
 static int parse_positive_int(const char *text, const char *label,
                               int *value_out);
 
@@ -60,63 +61,55 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  SharedBuffer *shm1 = mmap(NULL, sizeof(*shm1), PROT_READ | PROT_WRITE,
-                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  if (shm1 == MAP_FAILED) {
-    perror("mmap shm1");
+  FILE *input = fopen(g_input_path, "r");
+  if (!input) {
+    perror("open input");
     return EXIT_FAILURE;
   }
-
-  SharedBuffer *shm2 = mmap(NULL, sizeof(*shm2), PROT_READ | PROT_WRITE,
-                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  if (shm2 == MAP_FAILED) {
-    perror("mmap shm2");
+  fclose(input); /* Fail before starting IPC workers for an invalid path. */
+  SharedBuffer *buffers =
+      mmap(NULL, 2 * sizeof(*buffers), PROT_READ | PROT_WRITE,
+           MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (buffers == MAP_FAILED) {
+    perror("mmap");
     return EXIT_FAILURE;
   }
-
-  buffer_init(shm1);
-  buffer_init(shm2);
-
-  pid_t reader_pid = fork();
-  if (reader_pid < 0) {
-    perror("fork reader");
+  if (!buffer_init(&buffers[0])) {
+    munmap(buffers, 2 * sizeof(*buffers));
     return EXIT_FAILURE;
   }
-  if (reader_pid == 0) {
-    reader_process(shm1);
-    exit(EXIT_SUCCESS);
-  }
-
-  pid_t transformer_pid = fork();
-  if (transformer_pid < 0) {
-    perror("fork transformer");
+  if (!buffer_init(&buffers[1])) {
+    buffer_destroy(&buffers[0]);
+    munmap(buffers, 2 * sizeof(*buffers));
     return EXIT_FAILURE;
   }
-  if (transformer_pid == 0) {
-    transformer_process(shm1, shm2);
-    exit(EXIT_SUCCESS);
+  pid_t children[3] = {0};
+  size_t started = 0;
+  bool success = false;
+  for (int stage = 0; stage < 3; ++stage) {
+    pid_t pid = lab_fork();
+    if (pid < 0) {
+      perror("fork pipeline");
+      lab_terminate_children(children, started);
+      goto cleanup;
+    }
+    if (pid == 0) {
+      if (stage == 0)
+        reader_process(&buffers[0]);
+      else if (stage == 1)
+        transformer_process(&buffers[0], &buffers[1]);
+      else
+        printer_process(&buffers[1]);
+      lab_child_exit(ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS);
+    }
+    children[started++] = pid;
   }
-
-  pid_t printer_pid = fork();
-  if (printer_pid < 0) {
-    perror("fork printer");
-    return EXIT_FAILURE;
-  }
-  if (printer_pid == 0) {
-    printer_process(shm2);
-    exit(EXIT_SUCCESS);
-  }
-
-  wait_for_child(reader_pid);
-  wait_for_child(transformer_pid);
-  wait_for_child(printer_pid);
-
-  buffer_destroy(shm1);
-  buffer_destroy(shm2);
-  munmap(shm1, sizeof(*shm1));
-  munmap(shm2, sizeof(*shm2));
-
-  return EXIT_SUCCESS;
+  success = lab_supervise_children(children, started);
+cleanup:
+  buffer_destroy(&buffers[1]);
+  buffer_destroy(&buffers[0]);
+  munmap(buffers, 2 * sizeof(*buffers));
+  return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 static void reader_process(SharedBuffer *out) {
@@ -124,7 +117,7 @@ static void reader_process(SharedBuffer *out) {
   if (!fp) {
     perror("reader fopen");
     buffer_signal_done(out);
-    exit(EXIT_FAILURE);
+    lab_child_exit(EXIT_FAILURE);
   }
 
   int ch;
@@ -141,36 +134,35 @@ static void reader_process(SharedBuffer *out) {
     }
   }
 
-  fclose(fp);
+  bool success = !ferror(fp);
+  if (fclose(fp) != 0)
+    success = false;
   buffer_signal_done(out);
+  if (!success) {
+    perror("read input");
+    lab_child_exit(EXIT_FAILURE);
+  }
 }
 
 static void transformer_process(SharedBuffer *in, SharedBuffer *out) {
-  char prev = '\0';
+  bool pending_star = false;
   char ch;
-
   while (buffer_pop(in, &ch)) {
-    if (prev == '*') {
+    if (pending_star) {
+      pending_star = false;
       if (ch == '*') {
         buffer_push(out, '#');
-        prev = '\0';
         continue;
       }
-      buffer_push(out, prev);
-      prev = ch;
-      continue;
+      buffer_push(out, '*');
     }
-
-    if (ch == '*') {
-      prev = ch;
-    } else {
+    if (ch == '*')
+      pending_star = true;
+    else
       buffer_push(out, ch);
-    }
   }
-
-  if (prev == '*') {
-    buffer_push(out, prev);
-  }
+  if (pending_star)
+    buffer_push(out, '*');
 
   buffer_signal_done(out);
 }
@@ -193,18 +185,12 @@ static void printer_process(SharedBuffer *in) {
   }
 }
 
-static void buffer_init(SharedBuffer *buffer) {
-  buffer->head = 0;
-  buffer->tail = 0;
-  buffer->count = 0;
+static bool buffer_init(SharedBuffer *buffer) {
+  buffer->head = buffer->tail = buffer->count = 0;
   buffer->done = 0;
-
-  if (sem_init(&buffer->mutex, 1, 1) == -1 ||
-      sem_init(&buffer->items, 1, 0) == -1 ||
-      sem_init(&buffer->spaces, 1, BUF_SIZE) == -1) {
-    perror("sem_init");
-    exit(EXIT_FAILURE);
-  }
+  sem_t *semaphores[] = {&buffer->mutex, &buffer->items, &buffer->spaces};
+  const unsigned int values[] = {1, 0, BUF_SIZE};
+  return lab_sem_initialize(semaphores, values, 3);
 }
 
 static void buffer_destroy(SharedBuffer *buffer) {
@@ -256,24 +242,14 @@ static void safe_sem_wait(sem_t *sem) {
       continue;
     }
     perror("sem_wait");
-    exit(EXIT_FAILURE);
+    lab_child_exit(EXIT_FAILURE);
   }
 }
 
 static void safe_sem_post(sem_t *sem) {
   if (sem_post(sem) == -1) {
     perror("sem_post");
-    exit(EXIT_FAILURE);
-  }
-}
-
-static void wait_for_child(pid_t pid) {
-  while (waitpid(pid, NULL, 0) == -1) {
-    if (errno == EINTR) {
-      continue;
-    }
-    perror("waitpid");
-    break;
+    lab_child_exit(EXIT_FAILURE);
   }
 }
 

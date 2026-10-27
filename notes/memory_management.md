@@ -1,8 +1,15 @@
 # Memory Management
 
+For executable file-backed memory exercises, see [lab19](../labs/lab19/README.md)
+and the [mapping notes](dynamic_loading_and_mappings.md). The models below
+explain OS mechanisms; the lab defines userspace bounds, ownership, and access.
+
 Memory management is the OS job of deciding what lives in RAM, where it lives, and for how long. It is part librarian, part traffic cop: keep the shelves organized, keep the CPU fed, and make sure programs do not stomp on each other.
 
-This note walks through the main ideas, from early partitioning to paging and page replacement.
+This note separates **historical/context-specific models** (overlays and
+contiguous partitioning), **virtual-memory mechanisms** (paging and translation),
+and **userspace C ownership**. The textbook allocation and replacement policies
+are design models, not a description of one current Linux implementation.
 
 ## Memory sharing techniques
 
@@ -22,7 +29,7 @@ Memory at one moment
 
 Swapping
 
-When RAM is full, inactive processes can be moved to disk to free space. Later they are swapped back in.
+Whole-process swapping is a historical model. In a paged virtual-memory system, selected pages may be reclaimed or moved to swap; the entire process need not move together.
 
 RAM            Disk
 [P1][P2][P3]   [P4][P5]
@@ -117,7 +124,12 @@ Segmentation matches how programmers think about memory, but it can still suffer
 
 ## Page faults
 
-A page fault happens when a process references a page that is not in RAM. The OS must fetch it from disk, update the page table, and restart the instruction.
+A page fault occurs when an access cannot complete using the current page-table
+mapping or permissions. It may allocate a zero-filled page, handle copy-on-write,
+or read data from storage. A minor fault does not require storage I/O; an invalid
+access can result in a signal rather than a successful retry. A TLB miss alone
+is not necessarily a page fault. See the
+[Linux virtual-memory overview](https://docs.kernel.org/admin-guide/mm/concepts.html).
 
 Page fault flow
 
@@ -156,12 +168,26 @@ Optimal
 
 Evict the page that will not be used for the longest time in the future. It is not implementable in real systems but is a useful benchmark.
 
-LRU
+LRU (textbook policy)
 
-Evict the page that has not been used for the longest time in the past. This approximates optimal behavior and is common in practice.
+Evict the page that has not been used for the longest time in the past. Exact LRU is a useful comparison; practical reclaim policies approximate recency and consider additional constraints.
 
 LRU idea
 recently used -> keep
 long time ago -> evict
 
 No replacement policy is perfect. The right choice depends on workload, hardware support, and performance goals.
+
+## C ownership in the labs
+
+Check allocations before use, grow buffers through a temporary `realloc`
+pointer, and release only initialized resources. `getline` reads one complete
+record; validate its fields afterward rather than treating fragments of a long
+line as separate records.
+
+The [worker queue](../labs/common/bounded_queue.h) allocates fixed storage once,
+and the restaurant streams input instead of retaining the whole order file.
+Capacity limits apply backpressure when input arrives faster than workers can
+process it. Process mappings remain alive until children are reaped, and thread
+arguments remain alive until their threads join. These are the application
+ownership rules described in the [modern C/POSIX guide](modern_c_patterns.md).

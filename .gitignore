@@ -50,3 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Local lab builds and Python regression-check caches
+/build/
+__pycache__/

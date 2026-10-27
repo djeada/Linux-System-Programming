@@ -1,5 +1,9 @@
+#include "../common/system.h"
+
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -26,7 +30,7 @@ static int player_row = -1;
 static int player_col = -1;
 static bool game_completed = false;
 
-static void load_maze(const char *filename);
+static bool load_maze(const char *filename);
 static void print_maze(void);
 static void clear_screen(void);
 static void reveal_cell(int r, int c);
@@ -35,11 +39,50 @@ static bool reveal_adjacent_hint(void);
 static void reveal_random_safe_cell(void);
 static bool is_maze_fully_revealed(void);
 static bool in_bounds(int r, int c);
-static bool read_move(char *move_out);
+static int read_move(char *move_out);
 
-static void cheat_handler(int signo);
-static void alarm_handler(int signo);
-static void quit_handler(int signo);
+static int signal_pipe[2] = {-1, -1};
+static volatile sig_atomic_t quit_requested = 0;
+static volatile sig_atomic_t cheat_requested = 0;
+
+/* Only async-signal-safe notification belongs in a handler. */
+static void notify_signal(int signo) {
+  int saved_errno = errno;
+  if (signo == SIGINT)
+    quit_requested = 1;
+  else
+    cheat_requested = 1;
+  const char wake = 'x';
+  ssize_t ignored = write(signal_pipe[1], &wake, 1);
+  (void)ignored;
+  errno = saved_errno;
+}
+
+static bool setup_signals(void) {
+  if (pipe(signal_pipe) < 0) {
+    perror("pipe");
+    return false;
+  }
+  for (int i = 0; i < 2; ++i) {
+    if (fcntl(signal_pipe[i], F_SETFL, O_NONBLOCK) < 0 ||
+        fcntl(signal_pipe[i], F_SETFD, FD_CLOEXEC) < 0) {
+      perror("fcntl");
+      close(signal_pipe[0]);
+      close(signal_pipe[1]);
+      return false;
+    }
+  }
+  struct sigaction action = {.sa_handler = notify_signal};
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGINT, &action, NULL) < 0 ||
+      sigaction(SIGTSTP, &action, NULL) < 0) {
+    perror("sigaction");
+    close(signal_pipe[0]);
+    close(signal_pipe[1]);
+    return false;
+  }
+  return true;
+}
 
 int main(int argc, char *argv[]) {
   if (argc != 2) {
@@ -47,12 +90,12 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  load_maze(argv[1]);
+  if (!load_maze(argv[1]))
+    return EXIT_FAILURE;
   srand((unsigned int)time(NULL));
 
-  signal(SIGALRM, alarm_handler);
-  signal(SIGINT, quit_handler);
-  signal(SIGTSTP, cheat_handler);
+  if (!setup_signals())
+    return EXIT_FAILURE;
 
   while (!game_completed) {
     print_maze();
@@ -60,9 +103,16 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
 
     char move = '\0';
-    if (!read_move(&move)) {
-      printf("\nInput error. Exiting...\n");
-      return EXIT_FAILURE;
+    int input_status = read_move(&move);
+    if (input_status <= 0 || game_completed) {
+      sigset_t blocked;
+      sigemptyset(&blocked);
+      sigaddset(&blocked, SIGINT);
+      sigaddset(&blocked, SIGTSTP);
+      sigprocmask(SIG_BLOCK, &blocked, NULL);
+      close(signal_pipe[0]);
+      close(signal_pipe[1]);
+      return input_status < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
     int new_row = player_row;
@@ -110,80 +160,71 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  sigset_t blocked;
+  sigemptyset(&blocked);
+  sigaddset(&blocked, SIGINT);
+  sigaddset(&blocked, SIGTSTP);
+  sigprocmask(SIG_BLOCK, &blocked, NULL);
+  close(signal_pipe[0]);
+  close(signal_pipe[1]);
   return EXIT_SUCCESS;
 }
 
-static void load_maze(const char *filename) {
+static bool load_maze(const char *filename) {
   FILE *fp = fopen(filename, "r");
   if (!fp) {
-    perror("Error opening maze file");
-    exit(EXIT_FAILURE);
+    perror("open maze");
+    return false;
   }
-
-  char line[MAX_COLS + 2];
-  bool start_found = false;
-  bool exit_found = false;
-
+  char *line = NULL;
+  size_t capacity = 0;
+  ssize_t length;
+  int starts = 0, exits = 0;
+  bool valid = false;
   rows = 0;
   cols = 0;
-
-  while (fgets(line, sizeof(line), fp)) {
-    line[strcspn(line, "\r\n")] = '\0';
-
-    int line_len = (int)strlen(line);
-    if (line_len == 0) {
-      continue;
+  while ((length = getline(&line, &capacity, fp)) >= 0) {
+    if (length && line[length - 1] == '\n')
+      --length;
+    if (length && line[length - 1] == '\r')
+      --length;
+    if (length == 0 || length > MAX_COLS || rows == MAX_ROWS ||
+        memchr(line, '\0', (size_t)length) || (rows && length != cols)) {
+      fprintf(stderr, "Invalid maze dimensions or inconsistent row lengths.\n");
+      goto done;
     }
-    if (line_len > MAX_COLS) {
-      fprintf(stderr, "Maze row exceeds max columns (%d).\n", MAX_COLS);
-      exit(EXIT_FAILURE);
-    }
-
-    if (rows == 0) {
-      cols = line_len;
-    } else if (line_len != cols) {
-      fprintf(stderr, "Inconsistent row lengths in maze file.\n");
-      exit(EXIT_FAILURE);
-    }
-
-    for (int i = 0; i < cols; i++) {
-      maze[rows][i] = line[i];
-      revealed[rows][i] = false;
-      if (line[i] == START_CELL) {
+    cols = (int)length;
+    for (int column = 0; column < cols; ++column) {
+      maze[rows][column] = line[column];
+      revealed[rows][column] = false;
+      if (line[column] == START_CELL) {
+        ++starts;
         player_row = rows;
-        player_col = i;
-        start_found = true;
-      } else if (line[i] == EXIT_CELL) {
-        exit_found = true;
-      }
+        player_col = column;
+      } else if (line[column] == EXIT_CELL)
+        ++exits;
     }
-
-    rows++;
-    if (rows >= MAX_ROWS) {
-      fprintf(stderr, "Maze exceeds max rows (%d).\n", MAX_ROWS);
-      exit(EXIT_FAILURE);
-    }
+    ++rows;
   }
-
-  fclose(fp);
-
-  if (!start_found) {
-    fprintf(stderr,
-            "Maze file must contain a starting position marked with '%c'.\n",
-            START_CELL);
-    exit(EXIT_FAILURE);
+  if (ferror(fp)) {
+    perror("read maze");
+    goto done;
   }
-  if (!exit_found) {
-    fprintf(stderr, "Maze file must contain an exit marked with '%c'.\n",
-            EXIT_CELL);
-    exit(EXIT_FAILURE);
+  if (starts != 1 || exits == 0) {
+    fprintf(stderr, "Maze must contain exactly one S and at least one E.\n");
+    goto done;
   }
-
   reveal_surroundings(player_row, player_col);
+  valid = true;
+done:
+  free(line);
+  fclose(fp);
+  return valid;
 }
 
 static void clear_screen(void) {
-  printf("\033[H\033[J");
+  if (isatty(STDOUT_FILENO))
+    printf("\033[H\033[J");
   fflush(stdout);
 }
 
@@ -281,50 +322,68 @@ static bool in_bounds(int r, int c) {
   return r >= 0 && r < rows && c >= 0 && c < cols;
 }
 
-static bool read_move(char *move_out) {
-  char input_buffer[16];
-
-  while (true) {
-    errno = 0;
-    alarm(TIMEOUT_SECONDS);
-
-    if (!fgets(input_buffer, sizeof(input_buffer), stdin)) {
-      alarm(0);
-      if (errno == EINTR) {
-        clearerr(stdin);
+static int read_move(char *move_out) {
+  static char input[4096];
+  static size_t position = 0, available = 0;
+  for (;;) {
+    if (quit_requested) {
+      printf("\nExiting the Maze Navigator. Goodbye!\n");
+      game_completed = true;
+      return 0;
+    }
+    if (cheat_requested) {
+      cheat_requested = 0;
+      printf("\nCheat mode activated!\n");
+      reveal_random_safe_cell();
+      print_maze();
+      if (is_maze_fully_revealed()) {
+        game_completed = true;
+        printf("The maze is fully revealed. Game over!\n");
+        return 0;
+      }
+    }
+    while (position < available) {
+      unsigned char value = (unsigned char)input[position++];
+      if (!isspace(value)) {
+        *move_out = (char)toupper(value);
+        return 1;
+      }
+    }
+    struct pollfd ready[] = {{STDIN_FILENO, POLLIN, 0},
+                             {signal_pipe[0], POLLIN, 0}};
+    int result = poll(ready, 2, TIMEOUT_SECONDS * 1000);
+    if (result < 0) {
+      if (errno == EINTR)
         continue;
-      }
-      return false;
+      perror("poll");
+      return -1;
     }
-
-    alarm(0);
-
-    for (int i = 0; input_buffer[i] != '\0'; i++) {
-      if (!isspace((unsigned char)input_buffer[i])) {
-        *move_out = (char)toupper((unsigned char)input_buffer[i]);
-        return true;
-      }
+    if (result == 0) {
+      printf("\nTime's up! Please respond faster.\n");
+      fflush(stdout);
+      continue;
     }
-
-    *move_out = '\0';
-    return true;
+    if (ready[1].revents & POLLIN) {
+      char wake[64];
+      while (read(signal_pipe[0], wake, sizeof(wake)) > 0) {
+      }
+      continue;
+    }
+    if (ready[0].revents & (POLLIN | POLLHUP)) {
+      ssize_t bytes = read(STDIN_FILENO, input, sizeof(input));
+      if (bytes < 0 && errno == EINTR)
+        continue;
+      if (bytes < 0) {
+        perror("read input");
+        return -1;
+      }
+      if (bytes == 0)
+        return 0;
+      position = 0;
+      available = (size_t)bytes;
+    } else if (ready[0].revents & (POLLERR | POLLNVAL)) {
+      fprintf(stderr, "Input stream unavailable\n");
+      return -1;
+    }
   }
-}
-
-static void cheat_handler(int signo) {
-  (void)signo;
-  printf("\nCheat mode activated!\n");
-  reveal_random_safe_cell();
-  print_maze();
-}
-
-static void alarm_handler(int signo) {
-  (void)signo;
-  printf("\nTime's up! Please respond faster.\n");
-}
-
-static void quit_handler(int signo) {
-  (void)signo;
-  printf("\nExiting the Maze Navigator. Goodbye!\n");
-  exit(EXIT_SUCCESS);
 }

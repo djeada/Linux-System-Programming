@@ -27,13 +27,17 @@ Even a simple increment is not one action. It is a read, a modify, and a write.
 
 Shared counter starts at 5
 
-Time -> 
+Time ->
 T1: read 5     modify -> 6     write 6
 T2:     read 5     modify -> 6     write 6
 
 Final value is 6, but two increments happened. One update vanished.
 
-This is the failure the critical section problem is designed to prevent.
+The diagram illustrates a lost update. In actual C11 threads, unsynchronized
+conflicting non-atomic accesses constitute a data race and have undefined
+behavior; this one outcome is not the full set of possible behavior. A `volatile`
+flag does not provide thread synchronization. Use a mutex or suitable C11 atomic
+operations and establish a complete protocol.
 
 ## Requirements for a correct solution
 
@@ -45,4 +49,13 @@ This is the failure the critical section problem is designed to prevent.
 
 Imagine a printer shared by two users. If both try to send a job at the same time without coordination, pages can interleave and the output becomes unreadable. A critical section rule is the policy that says only one job may use the printer at a time, and everyone else must wait their turn.
 
-Solutions that enforce these rules include locks, semaphores, monitors, and disabling interrupts in very specific low-level cases. The details differ, but the goal is always the same: keep shared data consistent.
+For userspace C, start with a mutex around the complete state transition and
+blocking conditions around wait predicates. The [bounded queue](../labs/common/bounded_queue.h)
+updates its data, indices, and count under one mutex. Mutex ownership alone does
+not guarantee fairness or bounded waiting; that requires an admission policy.
+
+**Kernel mechanism:** disabling interrupts belongs to privileged kernel code
+and is not an application-level substitute for a userspace lock. Classical
+critical-section algorithms explain requirements; the
+[implementation guide](modern_c_patterns.md) identifies the C/POSIX patterns
+used in the executable labs.

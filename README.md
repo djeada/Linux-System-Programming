@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Language: C](https://img.shields.io/badge/Language-C-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
 
-A comprehensive, hands-on repository for learning Linux system programming through practical labs, detailed notes, and quizzes. Each lab focuses on fundamental OS concepts (processes, threads, synchronization, IPC) with clear instructions and reference implementations in modern C.
+A hands-on repository for learning Linux system programming through practical labs, notes, and quizzes. Twenty labs cover processes, threads, file I/O, filesystems, networking, event loops, terminal job control, services, isolation, diagnostics, and advanced interfaces. Reference implementations use C11 with current POSIX/Linux patterns. [The implementation guide](notes/modern_c_patterns.md) separates recommended application patterns, API comparisons, and historical OS models; the [learning path](notes/learning_path.md) connects the topics.
 
 ![linux_system_programming](https://github.com/user-attachments/assets/f3e18e63-7e2c-4705-b400-37fa533f6d35)
 
@@ -25,12 +25,14 @@ A comprehensive, hands-on repository for learning Linux system programming throu
 
 ## About
 
-This repository is designed for students and developers who want to gain practical experience with Linux system programming. It covers essential topics including process management, inter-process communication, threading, synchronization mechanisms, and more. Each lab is self-contained with detailed instructions, and the notes section provides theoretical background to complement the hands-on exercises.
+This repository is designed for students and developers who want to gain practical experience with Linux system programming. It covers essential topics including process management, inter-process communication, threading, synchronization mechanisms, and more. Each lab is a separate executable with detailed instructions and shared checked helpers; the notes provide the OS background for the exercises.
 
 ## Repository Layout
 
 - `labs/` - programming assignments with `main.c` and lab-specific `README.md`
-- `notes/` - course notes and reference materials
+- `labs/common/` - shared error handling, process cleanup, parsing, and bounded queues
+- `notes/` - course notes, the modern C/POSIX guide, and clearly labeled OS models
+- `tests/` - strict builds, behavioral checks, and Linux fault-injection fixtures
 - `quizzes/` - quick checks and practice questions
 - `LICENSE` - MIT license
 
@@ -40,16 +42,35 @@ Each lab includes a dedicated README with objectives, constraints, and build/run
 
 | Lab | Topic | Core Concepts | Difficulty | Est. Time |
 | --- | --- | --- | --- | --- |
-| [lab1](labs/lab1) | Maze Navigator | signals, timeouts, input handling | Beginner | 2-3 hours |
-| [lab2](labs/lab2) | Forked File Reader | `fork`, independent file I/O | Beginner | 1-2 hours |
-| [lab3](labs/lab3) | Mini Shell | parsing, `fork`, `execvp`, `waitpid` | Intermediate | 3-4 hours |
-| [lab4](labs/lab4) | Sleeping Barber | shared memory, semaphores, IPC | Advanced | 4-6 hours |
-| [lab5](labs/lab5) | Text Pipeline | multi-process pipeline, shared buffers | Advanced | 4-5 hours |
-| [lab6](labs/lab6) | Parking Garage | synchronization policy, fairness | Advanced | 4-6 hours |
-| [lab7](labs/lab7) | Thread Pool | worker threads, work queues | Intermediate | 3-4 hours |
-| [lab8](labs/lab8) | Restaurant Simulation | producers/consumers, reporting | Advanced | 4-5 hours |
+| [lab1](labs/lab1) | Maze Navigator | `sigaction`, self-pipe, `poll`, complete input | Beginner | 2-3 hours |
+| [lab2](labs/lab2) | Forked File Reader | CLI paths, independent file I/O, child reaping | Beginner | 1-2 hours |
+| [lab3](labs/lab3) | Mini Shell | `posix_spawnp`, complete lines, checked child status; fork/exec comparison | Intermediate | 3-4 hours |
+| [lab4](labs/lab4) | Sleeping Barber | shared FIFO, per-customer completion, supervised processes | Advanced | 4-6 hours |
+| [lab5](labs/lab5) | Text Pipeline | bounded shared buffers, stream preservation, failure propagation | Advanced | 4-5 hours |
+| [lab6](labs/lab6) | Parking Garage | reserved capacity, per-vehicle gates, phase fairness | Advanced | 4-6 hours |
+| [lab7](labs/lab7) | Thread Pool | reusable workers, bounded queue, explicit closure | Intermediate | 3-4 hours |
+| [lab8](labs/lab8) | Restaurant Simulation | streamed orders, backpressure, monotonic deadlines, final reporting | Advanced | 4-5 hours |
+| [lab9](labs/lab9) | Descriptor I/O | complete binary copies, partial I/O, `EINTR`, positional offsets | Intermediate | 2-3 hours |
+| [lab10](labs/lab10) | Filesystems and Persistence | descriptor-relative traversal, metadata, links, durable replacement | Intermediate | 3-4 hours |
+| [lab11](labs/lab11) | Network and Local Sockets | TCP/UDP/Unix sockets, framing, timeouts, half-closes | Intermediate | 3-4 hours |
+| [lab12](labs/lab12) | Event-driven Server | nonblocking sockets, `epoll`, bounded buffers, timer/signal descriptors | Advanced | 4-6 hours |
+| [lab13](labs/lab13) | Shell and Terminal Jobs | pipelines, redirection, process groups, `jobs`/`bg`/`fg` | Advanced | 5-7 hours |
+| [lab14](labs/lab14) | Service Lifecycle | validated reload, graceful stop, logging, systemd readiness | Intermediate | 3-4 hours |
+| [lab15](labs/lab15) | Security and Isolation | credentials, capabilities, limits, seccomp, namespaces, delegated cgroups | Advanced | 4-6 hours |
+| [lab16](labs/lab16) | Diagnostics | `strace`, GDB, sanitizers, `/proc`, descriptor accounting | Intermediate | 2-4 hours |
+| [lab17](labs/lab17) | C11 Atomics | relaxed counting, acquire/release publication, lifetime | Advanced | 3-4 hours |
+| [lab18](labs/lab18) | Runtime Loading | shared libraries, versioned C ABI, `dlopen`/`dlsym`, unload ownership | Intermediate | 2-3 hours |
+| [lab19](labs/lab19) | File-backed Mappings | private/shared mapping, advisory locks, `msync`, `mprotect` | Advanced | 3-4 hours |
+| [lab20](labs/lab20) | Optional io_uring | submission/completion, buffer lifetime, explicit offsets; liburing required | Advanced | 3-5 hours |
+
+The times are study estimates, including exercises. Follow the
+[suggested learning order and coverage map](notes/learning_path.md) rather than
+assuming lab numbers are the only prerequisite order. Lab15 reports restricted
+optional mechanisms explicitly; lab20 is an optional dependency target.
 
 ## Notes
+
+Start with **[Modern C/POSIX Patterns](notes/modern_c_patterns.md)** to choose an implementation approach and compare it with older recipes.
 
 The `notes/` directory contains comprehensive course materials covering theoretical concepts that complement the hands-on labs:
 
@@ -60,6 +81,15 @@ The `notes/` directory contains comprehensive course materials covering theoreti
 - **[Critical Section Problem](notes/critical_section_problem.md)** - Race conditions, mutual exclusion, and solutions
 - **[Scheduling Algorithms](notes/scheduling_algorithms.md)** - CPU scheduling policies and algorithms
 - **[Disk Scheduling](notes/disk_scheduling.md)** - Disk I/O optimization and scheduling strategies
+- **[File I/O and Filesystems](notes/file_io_and_filesystems.md)** - Descriptors, metadata, links, permissions, persistence
+- **[Networking and Event Loops](notes/networking_and_event_loops.md)** - Framing, transports, readiness, bounded state
+- **[Shells and Terminals](notes/shells_and_terminals.md)** - Pipelines, process groups, terminal control
+- **[Service Lifecycle](notes/service_lifecycle.md)** - Readiness, logging, configuration reload, shutdown
+- **[Security and Isolation](notes/security_and_isolation.md)** - Credentials, capabilities, seccomp, namespaces, cgroups
+- **[Debugging and Performance](notes/debugging_and_performance.md)** - Tracing, debugging, sanitizer and profiling exercises
+- **[Atomics and Memory Order](notes/atomics_and_memory_order.md)** - C11 atomicity and publication protocols
+- **[Dynamic Loading and Mappings](notes/dynamic_loading_and_mappings.md)** - ABI and address ownership
+- **[Asynchronous I/O](notes/asynchronous_io.md)** - io_uring completion model and buffer lifetime
 
 These notes are perfect for reviewing concepts before tackling labs or preparing for exams.
 
@@ -69,17 +99,18 @@ These notes are perfect for reviewing concepts before tackling labs or preparing
 
 To work with the labs and examples in this repository, you'll need:
 
-- **Operating System:** Linux or Unix-like environment (Ubuntu, Debian, macOS, WSL on Windows)
+- **Operating System:** Linux (including WSL2). The process labs use anonymous shared mappings and process-shared POSIX semaphores; other Unix-like systems may need changes.
 - **Compiler:** GCC (recommended) or Clang with C11 support
   ```sh
   # Install GCC on Ubuntu/Debian
   sudo apt update && sudo apt install build-essential
-  
+
   # Verify installation
   gcc --version
   ```
 - **POSIX Support:** POSIX threads library and semaphores (usually included in standard Linux distributions)
-- **Tools:** Basic familiarity with command line, text editor, and Git
+- **Tools:** Make and Python 3 for the complete build/regression workflow; command-line, editor, and Git basics
+- **Optional tools:** `strace`, GDB, sanitizer runtimes, and `perf` for diagnostics; `pkg-config` and liburing development files for lab20. No optional library is required for `make all`.
 
 ### Quick Start
 
@@ -97,7 +128,7 @@ cd labs/lab1
 cat README.md
 
 # Compile the program
-gcc -std=c11 -Wall -Wextra -pedantic -o maze main.c
+gcc -std=c11 -Wall -Wextra -pedantic -o maze main.c -pthread
 
 # Run the program with the provided maze
 ./maze maze.txt
@@ -107,6 +138,27 @@ gcc -std=c11 -Wall -Wextra -pedantic -o maze main.c
 
 ### General Build Pattern
 
+Build and check the entire repository from its root:
+
+```sh
+make all
+make comparisons
+make test
+make optional  # lab20, or an explicit missing-dependency skip
+```
+
+`make all` builds labs1–19 and the lab18 plugin. `make comparisons` builds the
+lab3 fork/exec comparison and lab17 acquire/release publication exercise. The
+lab3 default uses `posix_spawnp`; lab13 is the separate terminal job-control
+shell. Keep `labs/common/` when copying a lab, since it contains shared helpers.
+Headers are included by the programs, not compiled or run directly.
+
+The tests build strict C11 binaries and check original and extended behaviors.
+Networking tests bind temporary loopback ports/Unix paths; terminal tests use
+a pseudo-terminal. A cgroup mutation test runs only with an explicitly delegated
+`LAB_CGROUP_PARENT`. Namespace/optional io_uring restrictions report skip reasons.
+The tests never install a service or change host kernel policy.
+
 Most labs follow the same structure (see each lab README for exact commands):
 
 ```sh
@@ -115,9 +167,14 @@ cc -std=c11 -Wall -Wextra -pedantic -o labX main.c -pthread
 ./labX [args]
 ```
 
+Lab18 also builds its shared plugin and links the host with `-ldl`; lab20 links
+liburing. Use their Make targets or their dedicated README commands.
+
 ## Conventions
 
-- **Language:** All code is written in C11 standard (no C++).
+- **Language:** C11 with POSIX.1-2008 interfaces and documented Linux extensions; keep C examples in C.
+- **Implementation path:** Prefer bounded work, explicit closure, checked startup, and owned worker lifetimes. Put API comparisons in a clearly labeled `comparisons/` directory.
+- **Theory:** Label historical algorithms and kernel mechanisms separately from userspace implementation advice.
 - **Compiler Flags:** Use `-Wall -Wextra -pedantic` for strict builds to catch potential issues.
 - **Threading:** Labs involving threads require the `-pthread` flag during compilation.
 - **Documentation:** Each lab includes a dedicated README with:
@@ -142,14 +199,19 @@ gcc -std=c11 -Wall -o program main.c -pthread
 gcc --version
 ```
 
-**Semaphore Issues:**
-```sh
-# If semaphore operations fail, you may need to increase system limits
-# Check current limits
-ipcs -l
+**Semaphore and Worker Issues:**
 
-# Remove stale semaphores (if needed)
-ipcrm -a
+These labs use anonymous shared mappings, not persistent System V IPC objects.
+They do not require global IPC cleanup. On an initialization or worker-startup
+error, the reference implementation stops/reaps started processes or closes and
+joins started threads before releasing shared state. `pthread_*` functions
+return error numbers directly; their errors are printed with `strerror`.
+
+For faster simulation runs, set `LAB_DELAY_MS` to a nonnegative millisecond
+value. This changes simulated work only; elapsed-time deadlines remain real:
+
+```sh
+LAB_DELAY_MS=10 ./build/lab4 5 10
 ```
 
 **Permission Denied:**
@@ -203,7 +265,7 @@ Contributions are welcome and appreciated! Here's how you can contribute:
    - Include clear comments and documentation
    - Follow the existing lab structure (README.md + main.c)
    - Ensure code compiles with `-Wall -Wextra -pedantic` without warnings
-4. **Test Your Changes** - Verify that your code works correctly
+4. **Test Your Changes** - Run `make test` and compile with strict warnings; keep partial-startup and shutdown paths covered
 5. **Submit a Pull Request** - Describe your changes and their purpose
 
 ### Contribution Ideas
