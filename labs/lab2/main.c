@@ -1,10 +1,5 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-#define FILE_PATH "/path/to/your/file.txt" // <<<=== Change this path as needed.
-#define MAX_LINE_LENGTH 256
+/* C11/POSIX: independent file descriptions and explicit child completion. */
+#include "../common/system.h"
 
 static int read_file_with_pid(const char *path) {
   FILE *fp = fopen(path, "r");
@@ -12,22 +7,40 @@ static int read_file_with_pid(const char *path) {
     perror("fopen");
     return EXIT_FAILURE;
   }
-
-  char line[MAX_LINE_LENGTH];
-  while (fgets(line, sizeof(line), fp)) {
-    printf("[PID %ld] %s", (long)getpid(), line);
+  char *line = NULL;
+  size_t capacity = 0;
+  ssize_t length;
+  while ((length = getline(&line, &capacity, fp)) >= 0) {
+    printf("[PID %ld] ", (long)getpid());
+    fwrite(line, 1, (size_t)length, stdout);
+    if (length && line[length - 1] != '\n')
+      putchar('\n');
   }
-
-  fclose(fp);
-  return EXIT_SUCCESS;
+  int result = ferror(fp) ? EXIT_FAILURE : EXIT_SUCCESS;
+  if (result)
+    perror("read file");
+  free(line);
+  if (fclose(fp) != 0) {
+    perror("fclose");
+    result = EXIT_FAILURE;
+  }
+  return result;
 }
 
-int main(void) {
-  pid_t pid = fork();
-  if (pid < 0) {
+int main(int argc, char *argv[]) {
+  if (argc != 2) {
+    fprintf(stderr, "Usage: %s <file>\n", argv[0]);
+    return EXIT_FAILURE;
+  }
+  pid_t child = lab_fork();
+  if (child < 0) {
     perror("fork");
     return EXIT_FAILURE;
   }
-
-  return read_file_with_pid(FILE_PATH);
+  if (child == 0)
+    lab_child_exit(read_file_with_pid(argv[1]));
+  int result = read_file_with_pid(argv[1]);
+  if (!lab_wait_child(child))
+    result = EXIT_FAILURE;
+  return result;
 }

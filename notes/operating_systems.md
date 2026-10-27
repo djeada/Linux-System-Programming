@@ -1,6 +1,16 @@
 # Operating Systems
 
+For the practical course sequence, see the [learning path](learning_path.md).
+File I/O, networking, services, isolation, and diagnostics complement the
+process/synchronization foundations below.
+
 An operating system is the layer that turns raw hardware into a usable machine. It schedules work, protects programs from each other, and offers the familiar abstractions we rely on every day: files, processes, and memory. Without it, every program would need to manage devices and hardware details on its own.
+
+The OS categories below are conceptual and historical models, and several can
+apply to the same modern system. They do not prescribe the API or algorithm to
+copy into an application. The [C/POSIX guide](modern_c_patterns.md) provides the
+implementation path for the labs: bounded workers, blocking synchronization,
+minimal signal handlers, and explicit resource ownership.
 
 Here is the big picture:
 

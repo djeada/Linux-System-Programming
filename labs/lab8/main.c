@@ -1,497 +1,246 @@
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
-#include <pthread.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <unistd.h>
+/* C11/POSIX: bounded streaming orders, monotonic deadlines, and final reporting
+   after every chef has joined. Thread arguments stay owned by main. */
+#include "../common/bounded_queue.h"
 
 #define MAX_DESC_LEN 256
-#define LINE_BUFFER 512
+#define QUEUE_CAPACITY 32
 #define REPORT_INTERVAL_SEC 2
 
 typedef struct {
-  int order_id;
-  int table_number;
+  int order_id, table_number, prep_time;
   char description[MAX_DESC_LEN];
-  int prep_time;
 } Order;
-
-typedef struct OrderNode {
-  Order order;
-  struct OrderNode *next;
-} OrderNode;
-
 typedef struct {
-  OrderNode *head;
-  OrderNode *tail;
-  int count;
-} OrderQueue;
-
-typedef struct {
-  Order *orders;
-  size_t total;
-  size_t next_index;
+  FILE *file;
+  char *line;
+  size_t capacity;
+  bool failed;
   pthread_mutex_t mutex;
-} OrderPool;
-
+} OrderSource;
 typedef struct {
-  OrderQueue queue;
+  LabQueue queue;
   pthread_mutex_t mutex;
-  pthread_cond_t cond;
-  int total_processed;
-  bool producers_done;
+  pthread_cond_t changed;
+  size_t processed;
+  bool finished;
 } SharedState;
-
 typedef struct {
   int id;
-  time_t end_time;
-  OrderPool *pool;
+  struct timespec deadline;
+  OrderSource *source;
   SharedState *shared;
 } CustomerArgs;
-
 typedef struct {
   int id;
   SharedState *shared;
 } ChefArgs;
 
-static bool parse_order_line(const char *line, Order *order_out);
-static int parse_int_field(const char *text, int *value_out);
-static char *trim_whitespace(char *text);
-static Order *load_orders(const char *path, size_t *count_out);
+static bool parse_order(char *line, Order *order) {
+  char *fields[4];
+  if (!lab_fields(line, fields, 4) || strlen(fields[2]) >= MAX_DESC_LEN ||
+      !lab_parse_int(fields[0], INT_MIN, &order->order_id) ||
+      !lab_parse_int(fields[1], INT_MIN, &order->table_number) ||
+      !lab_parse_int(fields[3], 0, &order->prep_time))
+    return false;
+  memcpy(order->description, fields[2], strlen(fields[2]) + 1);
+  return true;
+}
 
-static void enqueue_order(SharedState *shared, const Order *order);
-static bool dequeue_order(SharedState *shared, Order *order_out);
-static void drain_queue(SharedState *shared);
+static bool next_order(OrderSource *source, Order *order) {
+  lab_thread_check(pthread_mutex_lock(&source->mutex), "lock order source");
+  bool found = false;
+  while (getline(&source->line, &source->capacity, source->file) >= 0) {
+    if (!*lab_trim(source->line))
+      continue;
+    if (parse_order(source->line, order)) {
+      found = true;
+      break;
+    }
+    fprintf(stderr, "Skipping malformed order\n");
+  }
+  if (ferror(source->file)) {
+    perror("read orders");
+    source->failed = true;
+  }
+  lab_thread_check(pthread_mutex_unlock(&source->mutex), "unlock order source");
+  return found;
+}
 
-static void *customer_thread(void *arg);
-static void *chef_thread(void *arg);
-static void *reporter_thread(void *arg);
+static void *customer_thread(void *context) {
+  CustomerArgs *args = context;
+  while (lab_before(lab_now(), args->deadline)) {
+    Order order;
+    if (!next_order(args->source, &order))
+      break;
+    if (!lab_queue_push(&args->shared->queue, &order, &args->deadline))
+      break;
+    printf("[Customer %d] Enqueued Order %d for Table %d: %s\n", args->id,
+           order.order_id, order.table_number, order.description);
+    lab_simulate_ms(500);
+  }
+  printf("[Customer %d] Finished enqueuing orders.\n", args->id);
+  return NULL;
+}
+
+static void *chef_thread(void *context) {
+  ChefArgs *args = context;
+  Order order;
+  while (lab_queue_pop(&args->shared->queue, &order)) {
+    printf("[Chef %d] Processing Order %d: %s\n", args->id, order.order_id,
+           order.description);
+    lab_simulate_ms((long)order.prep_time * 1000);
+    lab_thread_check(pthread_mutex_lock(&args->shared->mutex),
+                     "lock statistics");
+    size_t completed = ++args->shared->processed;
+    lab_thread_check(pthread_mutex_unlock(&args->shared->mutex),
+                     "unlock statistics");
+    printf("[Chef %d] Completed Order %d. Total processed: %zu\n", args->id,
+           order.order_id, completed);
+  }
+  printf("[Chef %d] No more orders. Exiting.\n", args->id);
+  return NULL;
+}
+
+static void *reporter_thread(void *context) {
+  SharedState *shared = context;
+  for (;;) {
+    struct timespec deadline = lab_now();
+    deadline.tv_sec += REPORT_INTERVAL_SEC;
+    lab_thread_check(pthread_mutex_lock(&shared->mutex), "lock statistics");
+    while (!shared->finished) {
+      int code =
+          pthread_cond_timedwait(&shared->changed, &shared->mutex, &deadline);
+      if (code == ETIMEDOUT)
+        break;
+      lab_thread_check(code, "wait for reporting deadline");
+    }
+    bool finished = shared->finished;
+    size_t completed = shared->processed;
+    lab_thread_check(pthread_mutex_unlock(&shared->mutex), "unlock statistics");
+    printf("[Reporter] Orders waiting: %zu, Total processed: %zu\n",
+           lab_queue_count(&shared->queue), completed);
+    if (finished)
+      break;
+  }
+  puts("[Reporter] Final status reported. Exiting.");
+  return NULL;
+}
 
 int main(int argc, char *argv[]) {
-  if (argc != 5) {
+  int customers, chefs, duration;
+  if (argc != 5 || !lab_parse_int(argv[1], 1, &customers) ||
+      !lab_parse_int(argv[2], 1, &chefs) ||
+      !lab_parse_int(argv[4], 1, &duration)) {
     fprintf(stderr,
-            "Usage: %s <num_customers> <num_chefs> <input_file> "
-            "<simulation_duration>\n",
+            "Usage: %s <positive_customers> <positive_chefs> <orders_file> "
+            "<positive_seconds>\n",
             argv[0]);
     return EXIT_FAILURE;
   }
-
-  int num_customers = 0;
-  int num_chefs = 0;
-  int sim_duration = 0;
-
-  if (parse_int_field(argv[1], &num_customers) != 0 || num_customers <= 0 ||
-      parse_int_field(argv[2], &num_chefs) != 0 || num_chefs <= 0 ||
-      parse_int_field(argv[4], &sim_duration) != 0 || sim_duration <= 0) {
-    fprintf(stderr, "All numeric arguments must be positive integers.\n");
+  OrderSource source = {0};
+  SharedState shared = {0};
+  source.file = fopen(argv[3], "r");
+  if (!source.file) {
+    perror("open orders");
     return EXIT_FAILURE;
   }
-
-  size_t order_count = 0;
-  Order *orders = load_orders(argv[3], &order_count);
-  if (!orders || order_count == 0) {
-    fprintf(stderr, "No valid orders found in input file.\n");
-    free(orders);
-    return EXIT_FAILURE;
+  pthread_t *customer_ids = calloc((size_t)customers, sizeof(*customer_ids));
+  pthread_t *chef_ids = calloc((size_t)chefs, sizeof(*chef_ids));
+  CustomerArgs *customer_args =
+      calloc((size_t)customers, sizeof(*customer_args));
+  ChefArgs *chef_args = calloc((size_t)chefs, sizeof(*chef_args));
+  bool success = false, queue_ready = false, source_ready = false,
+       stats_ready = false, cond_ready = false;
+  if (!customer_ids || !chef_ids || !customer_args || !chef_args) {
+    perror("calloc threads");
+    goto cleanup;
   }
+  if (!lab_queue_init(&shared.queue, QUEUE_CAPACITY, sizeof(Order)))
+    goto cleanup;
+  queue_ready = true;
+  if (lab_thread_error(pthread_mutex_init(&source.mutex, NULL),
+                       "initialize source mutex"))
+    goto cleanup;
+  source_ready = true;
+  if (lab_thread_error(pthread_mutex_init(&shared.mutex, NULL),
+                       "initialize statistics mutex"))
+    goto cleanup;
+  stats_ready = true;
+  pthread_condattr_t attr;
+  if (lab_thread_error(pthread_condattr_init(&attr),
+                       "initialize condition attributes"))
+    goto cleanup;
+  int code = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+  if (!code)
+    code = pthread_cond_init(&shared.changed, &attr);
+  pthread_condattr_destroy(&attr);
+  if (lab_thread_error(code, "initialize reporter condition"))
+    goto cleanup;
+  cond_ready = true;
 
-  OrderPool pool = {
-      .orders = orders,
-      .total = order_count,
-      .next_index = 0,
-      .mutex = PTHREAD_MUTEX_INITIALIZER,
-  };
-
-  SharedState shared = {
-      .queue = {NULL, NULL, 0},
-      .mutex = PTHREAD_MUTEX_INITIALIZER,
-      .cond = PTHREAD_COND_INITIALIZER,
-      .total_processed = 0,
-      .producers_done = false,
-  };
-
-  time_t end_time = time(NULL) + sim_duration;
-
-  pthread_t *customer_threads =
-      calloc((size_t)num_customers, sizeof(*customer_threads));
-  pthread_t *chef_threads = calloc((size_t)num_chefs, sizeof(*chef_threads));
-  if (!customer_threads || !chef_threads) {
-    perror("calloc");
-    free(orders);
-    free(customer_threads);
-    free(chef_threads);
-    return EXIT_FAILURE;
-  }
-
-  pthread_t reporter_id;
-  if (pthread_create(&reporter_id, NULL, reporter_thread, &shared) != 0) {
-    perror("pthread_create reporter");
-    free(orders);
-    free(customer_threads);
-    free(chef_threads);
-    return EXIT_FAILURE;
-  }
-
-  int created_customers = 0;
-  int created_chefs = 0;
-  bool start_ok = true;
-
-  for (int i = 0; i < num_customers; i++) {
-    CustomerArgs *args = malloc(sizeof(*args));
-    if (!args) {
-      perror("malloc customer args");
-      start_ok = false;
+  pthread_t reporter;
+  if (lab_thread_error(
+          pthread_create(&reporter, NULL, reporter_thread, &shared),
+          "start reporter"))
+    goto cleanup;
+  int started_chefs = 0, started_customers = 0;
+  success = true;
+  struct timespec deadline = lab_now();
+  deadline.tv_sec += duration;
+  /* Consumers must exist before a producer can block on a full queue. */
+  for (; started_chefs < chefs; ++started_chefs) {
+    chef_args[started_chefs] =
+        (ChefArgs){.id = started_chefs + 1, .shared = &shared};
+    code = pthread_create(&chef_ids[started_chefs], NULL, chef_thread,
+                          &chef_args[started_chefs]);
+    if (lab_thread_error(code, "start chef")) {
+      success = false;
       break;
     }
-    args->id = i + 1;
-    args->end_time = end_time;
-    args->pool = &pool;
-    args->shared = &shared;
-    if (pthread_create(&customer_threads[i], NULL, customer_thread, args) !=
-        0) {
-      perror("pthread_create customer");
-      free(args);
-      start_ok = false;
-      break;
-    }
-    created_customers++;
   }
-
-  for (int i = 0; i < num_chefs && start_ok; i++) {
-    ChefArgs *args = malloc(sizeof(*args));
-    if (!args) {
-      perror("malloc chef args");
-      start_ok = false;
+  for (; success && started_customers < customers; ++started_customers) {
+    customer_args[started_customers] =
+        (CustomerArgs){.id = started_customers + 1,
+                       .deadline = deadline,
+                       .source = &source,
+                       .shared = &shared};
+    code = pthread_create(&customer_ids[started_customers], NULL,
+                          customer_thread, &customer_args[started_customers]);
+    if (lab_thread_error(code, "start customer")) {
+      success = false;
       break;
     }
-    args->id = i + 1;
-    args->shared = &shared;
-    if (pthread_create(&chef_threads[i], NULL, chef_thread, args) != 0) {
-      perror("pthread_create chef");
-      free(args);
-      start_ok = false;
-      break;
-    }
-    created_chefs++;
   }
-
-  if (!start_ok) {
-    pthread_mutex_lock(&shared.mutex);
-    shared.producers_done = true;
-    pthread_cond_broadcast(&shared.cond);
-    pthread_mutex_unlock(&shared.mutex);
-
-    for (int i = 0; i < created_customers; i++) {
-      pthread_join(customer_threads[i], NULL);
-    }
-    for (int i = 0; i < created_chefs; i++) {
-      pthread_join(chef_threads[i], NULL);
-    }
-
-    drain_queue(&shared);
-    pthread_join(reporter_id, NULL);
-
+  if (!success)
+    lab_queue_close(&shared.queue);
+  for (int id = 0; id < started_customers; ++id)
+    lab_thread_check(pthread_join(customer_ids[id], NULL), "join customer");
+  lab_queue_close(&shared.queue);
+  for (int id = 0; id < started_chefs; ++id)
+    lab_thread_check(pthread_join(chef_ids[id], NULL), "join chef");
+  lab_thread_check(pthread_mutex_lock(&shared.mutex), "lock statistics");
+  shared.finished = true;
+  lab_thread_check(pthread_cond_broadcast(&shared.changed), "wake reporter");
+  lab_thread_check(pthread_mutex_unlock(&shared.mutex), "unlock statistics");
+  lab_thread_check(pthread_join(reporter, NULL), "join reporter");
+  success = success && !source.failed;
+  if (success)
+    printf("Simulation complete. Total orders processed: %zu\n",
+           shared.processed);
+cleanup:
+  if (cond_ready)
+    pthread_cond_destroy(&shared.changed);
+  if (stats_ready)
     pthread_mutex_destroy(&shared.mutex);
-    pthread_cond_destroy(&shared.cond);
-    pthread_mutex_destroy(&pool.mutex);
-
-    free(orders);
-    free(customer_threads);
-    free(chef_threads);
-    return EXIT_FAILURE;
-  }
-
-  for (int i = 0; i < created_customers; i++) {
-    pthread_join(customer_threads[i], NULL);
-  }
-
-  pthread_mutex_lock(&shared.mutex);
-  shared.producers_done = true;
-  pthread_cond_broadcast(&shared.cond);
-  pthread_mutex_unlock(&shared.mutex);
-
-  for (int i = 0; i < created_chefs; i++) {
-    pthread_join(chef_threads[i], NULL);
-  }
-
-  pthread_join(reporter_id, NULL);
-
-  pthread_mutex_destroy(&shared.mutex);
-  pthread_cond_destroy(&shared.cond);
-  pthread_mutex_destroy(&pool.mutex);
-
-  free(orders);
-  free(customer_threads);
-  free(chef_threads);
-
-  printf("Simulation complete. Total orders processed: %d\n",
-         shared.total_processed);
-  return EXIT_SUCCESS;
-}
-
-static void *customer_thread(void *arg) {
-  CustomerArgs *args = arg;
-  int thread_id = args->id;
-  OrderPool *pool = args->pool;
-  SharedState *shared = args->shared;
-  time_t end_time = args->end_time;
-  free(args);
-
-  unsigned int seed = (unsigned int)(time(NULL) ^ (thread_id << 16));
-
-  while (time(NULL) < end_time) {
-    pthread_mutex_lock(&pool->mutex);
-    if (pool->next_index >= pool->total) {
-      pthread_mutex_unlock(&pool->mutex);
-      break;
-    }
-    Order order = pool->orders[pool->next_index++];
-    pthread_mutex_unlock(&pool->mutex);
-
-    enqueue_order(shared, &order);
-    printf("[Customer %d] Enqueued Order %d for Table %d: %s (Prep Time: %d "
-           "sec)\n",
-           thread_id, order.order_id, order.table_number, order.description,
-           order.prep_time);
-
-    usleep((useconds_t)((500 + rand_r(&seed) % 500) * 1000));
-  }
-
-  printf("[Customer %d] Finished enqueuing orders.\n", thread_id);
-  return NULL;
-}
-
-static void *chef_thread(void *arg) {
-  ChefArgs *args = arg;
-  int thread_id = args->id;
-  SharedState *shared = args->shared;
-  free(args);
-
-  Order order;
-  while (dequeue_order(shared, &order)) {
-    printf("[Chef %d] Processing Order %d: %s (Table %d, Prep Time: %d sec)\n",
-           thread_id, order.order_id, order.description, order.table_number,
-           order.prep_time);
-    sleep(order.prep_time);
-
-    pthread_mutex_lock(&shared->mutex);
-    shared->total_processed++;
-    pthread_mutex_unlock(&shared->mutex);
-
-    printf("[Chef %d] Completed Order %d. Total processed: %d\n", thread_id,
-           order.order_id, shared->total_processed);
-  }
-
-  printf("[Chef %d] No more orders. Exiting.\n", thread_id);
-  return NULL;
-}
-
-static void *reporter_thread(void *arg) {
-  SharedState *shared = arg;
-
-  while (1) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += REPORT_INTERVAL_SEC;
-
-    pthread_mutex_lock(&shared->mutex);
-    pthread_cond_timedwait(&shared->cond, &shared->mutex, &ts);
-    int waiting = shared->queue.count;
-    int processed = shared->total_processed;
-    bool done = shared->producers_done;
-    pthread_mutex_unlock(&shared->mutex);
-
-    printf("[Reporter] Orders waiting: %d, Total processed: %d\n", waiting,
-           processed);
-    if (done && waiting == 0) {
-      break;
-    }
-  }
-
-  printf("[Reporter] Final status reported. Exiting.\n");
-  return NULL;
-}
-
-static void enqueue_order(SharedState *shared, const Order *order) {
-  OrderNode *node = malloc(sizeof(*node));
-  if (!node) {
-    perror("malloc order node");
-    exit(EXIT_FAILURE);
-  }
-  node->order = *order;
-  node->next = NULL;
-
-  pthread_mutex_lock(&shared->mutex);
-  if (shared->queue.tail) {
-    shared->queue.tail->next = node;
-  } else {
-    shared->queue.head = node;
-  }
-  shared->queue.tail = node;
-  shared->queue.count++;
-  pthread_cond_signal(&shared->cond);
-  pthread_mutex_unlock(&shared->mutex);
-}
-
-static bool dequeue_order(SharedState *shared, Order *order_out) {
-  pthread_mutex_lock(&shared->mutex);
-  while (shared->queue.count == 0 && !shared->producers_done) {
-    pthread_cond_wait(&shared->cond, &shared->mutex);
-  }
-  if (shared->queue.count == 0 && shared->producers_done) {
-    pthread_mutex_unlock(&shared->mutex);
-    return false;
-  }
-
-  OrderNode *node = shared->queue.head;
-  *order_out = node->order;
-  shared->queue.head = node->next;
-  if (!shared->queue.head) {
-    shared->queue.tail = NULL;
-  }
-  shared->queue.count--;
-  pthread_mutex_unlock(&shared->mutex);
-
-  free(node);
-  return true;
-}
-
-static void drain_queue(SharedState *shared) {
-  pthread_mutex_lock(&shared->mutex);
-  OrderNode *node = shared->queue.head;
-  while (node) {
-    OrderNode *next = node->next;
-    free(node);
-    node = next;
-  }
-  shared->queue.head = NULL;
-  shared->queue.tail = NULL;
-  shared->queue.count = 0;
-  pthread_mutex_unlock(&shared->mutex);
-}
-
-static Order *load_orders(const char *path, size_t *count_out) {
-  FILE *fp = fopen(path, "r");
-  if (!fp) {
-    perror("fopen orders file");
-    return NULL;
-  }
-
-  size_t capacity = 32;
-  size_t count = 0;
-  Order *orders = calloc(capacity, sizeof(*orders));
-  if (!orders) {
-    perror("calloc orders");
-    fclose(fp);
-    return NULL;
-  }
-
-  char line[LINE_BUFFER];
-  while (fgets(line, sizeof(line), fp)) {
-    line[strcspn(line, "\r\n")] = '\0';
-    if (line[0] == '\0') {
-      continue;
-    }
-
-    Order order;
-    if (!parse_order_line(line, &order)) {
-      continue;
-    }
-
-    if (count == capacity) {
-      capacity *= 2;
-      Order *grown = realloc(orders, capacity * sizeof(*orders));
-      if (!grown) {
-        perror("realloc orders");
-        free(orders);
-        fclose(fp);
-        return NULL;
-      }
-      orders = grown;
-    }
-
-    orders[count++] = order;
-  }
-
-  fclose(fp);
-  *count_out = count;
-  return orders;
-}
-
-static bool parse_order_line(const char *line, Order *order_out) {
-  char buffer[LINE_BUFFER];
-  strncpy(buffer, line, sizeof(buffer) - 1);
-  buffer[sizeof(buffer) - 1] = '\0';
-
-  char *saveptr = NULL;
-  char *token = strtok_r(buffer, ",", &saveptr);
-  if (!token) {
-    return false;
-  }
-  token = trim_whitespace(token);
-  if (parse_int_field(token, &order_out->order_id) != 0) {
-    return false;
-  }
-
-  token = strtok_r(NULL, ",", &saveptr);
-  if (!token) {
-    return false;
-  }
-  token = trim_whitespace(token);
-  if (parse_int_field(token, &order_out->table_number) != 0) {
-    return false;
-  }
-
-  token = strtok_r(NULL, ",", &saveptr);
-  if (!token) {
-    return false;
-  }
-  token = trim_whitespace(token);
-  strncpy(order_out->description, token, sizeof(order_out->description) - 1);
-  order_out->description[sizeof(order_out->description) - 1] = '\0';
-
-  token = strtok_r(NULL, ",", &saveptr);
-  if (!token) {
-    return false;
-  }
-  token = trim_whitespace(token);
-  if (parse_int_field(token, &order_out->prep_time) != 0 ||
-      order_out->prep_time < 0) {
-    return false;
-  }
-
-  return true;
-}
-
-static int parse_int_field(const char *text, int *value_out) {
-  char *end = NULL;
-  errno = 0;
-  long value = strtol(text, &end, 10);
-  if (errno != 0 || end == text || *end != '\0' || value < INT_MIN ||
-      value > INT_MAX) {
-    return -1;
-  }
-  *value_out = (int)value;
-  return 0;
-}
-
-static char *trim_whitespace(char *text) {
-  while (*text && isspace((unsigned char)*text)) {
-    text++;
-  }
-
-  char *end = text + strlen(text);
-  while (end > text) {
-    end--;
-    if (!isspace((unsigned char)*end)) {
-      break;
-    }
-    *end = '\0';
-  }
-
-  return text;
+  if (source_ready)
+    pthread_mutex_destroy(&source.mutex);
+  if (queue_ready)
+    lab_queue_destroy(&shared.queue);
+  fclose(source.file);
+  free(source.line);
+  free(customer_ids);
+  free(chef_ids);
+  free(customer_args);
+  free(chef_args);
+  return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }

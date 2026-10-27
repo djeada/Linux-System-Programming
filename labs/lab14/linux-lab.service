@@ -1,0 +1,13 @@
+[Unit]
+Description=Linux programming lab: foreground service and readiness
+
+[Service]
+Type=notify
+ExecStart=%h/my_repos/Linux-System-Programming/build/lab14 %h/my_repos/Linux-System-Programming/labs/lab14/service.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+NoNewPrivileges=yes
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

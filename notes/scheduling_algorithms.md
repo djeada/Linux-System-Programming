@@ -6,7 +6,11 @@ A simple mental model is a ready queue and a CPU:
 
 ready queue -> scheduler -> CPU -> I/O or done
 
-Below are common algorithms, what they prioritize, and where they shine.
+The algorithms below are **classical scheduling models** for comparing waiting
+time, fairness, and preemption. They are not a promise that a current Linux
+kernel uses these exact rules. For application scheduling, start with the
+[fixed worker pool](../labs/lab7/README.md) and bounded queue; the kernel still
+schedules those workers.
 
 ## First come, first served (FCFS)
 
@@ -22,7 +26,7 @@ It is easy to implement but suffers from the convoy effect: one long job can del
 
 ## Shortest job first (SJF)
 
-SJF chooses the process with the smallest next CPU burst. It minimizes average waiting time if burst lengths are known.
+SJF chooses the process with the smallest next CPU burst. For the textbook case where all jobs are ready and burst lengths are known, this nonpreemptive order minimizes average waiting time.
 
 CPU: P2(2) | P3(3) | P1(5)
 
@@ -99,8 +103,13 @@ Typical rules
 - using a full time slice moves a job down
 - blocking for I/O can keep a job at the same level or move it up
 
-This adapts to workloads and provides good responsiveness without starving long jobs.
+This adapts to workloads. Preventing starvation requires explicit rules such as periodic priority boosts; the multilevel structure alone does not guarantee progress for low-priority jobs.
 
 ## Choosing an algorithm
 
-Interactive systems prioritize responsiveness, so RR or MLFQ are common. Batch systems often favor throughput and can use FCFS or SJF-like policies. Real-time systems focus on deadlines and use dedicated real-time schedulers.
+Use the models to identify tradeoffs, then measure the actual workload and
+platform. In the labs, bounded queues control backlog, blocking waits let other
+workers run, and monotonic clocks define elapsed-time cutoffs. The
+[garage](../labs/lab6/README.md) implements an explicit phase-fair admission policy;
+OS scheduling alone cannot enforce that application invariant. Real-time
+requirements need their own scheduling and worst-case timing analysis.

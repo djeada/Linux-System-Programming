@@ -2,7 +2,7 @@
 
 Disk scheduling is about deciding the order of disk I/O requests so the read/write head does not waste time moving around. On spinning disks, head movement is slow compared to CPU speed, so good scheduling can make the whole system feel faster.
 
-Think of a disk like a long hallway of tracks. Moving the head costs time, and the scheduler tries to minimize that travel.
+**Classical HDD model:** think of a disk like a long hallway of tracks. Moving the head costs time, and the scheduler tries to minimize that travel.
 
 Tracks: 0 ------------------------------------------ 199
 
@@ -24,7 +24,7 @@ access time = seek + rotation + transfer
 
 To compare algorithms, imagine a head starting at track 50 with requests at:
 
-10, 20, 35, 55, 70, 90, 150
+10, 90, 20, 150, 35, 70, 55
 
 ### First come, first served (FCFS)
 
@@ -49,7 +49,7 @@ This reduces total movement but can starve far requests if new nearby requests k
 Move in one direction servicing requests, then reverse at the end.
 
 If moving upward:
-50 -> 55 -> 70 -> 90 -> 150 -> reverse -> 35 -> 20 -> 10
+50 -> 55 -> 70 -> 90 -> 150 -> 199 -> reverse -> 35 -> 20 -> 10
 
 Wait times are more predictable than FCFS.
 
@@ -57,7 +57,7 @@ Wait times are more predictable than FCFS.
 
 Like SCAN, but only service in one direction. When the head reaches the end, it jumps back without servicing.
 
-50 -> 55 -> 70 -> 90 -> 150 -> jump -> 10 -> 20 -> 35
+50 -> 55 -> 70 -> 90 -> 150 -> 199 -> jump to 0 -> 10 -> 20 -> 35
 
 This gives a more uniform wait time across tracks.
 
@@ -79,7 +79,7 @@ This reduces unnecessary movement while keeping wait times fairly even.
 
 ## HDD vs SSD
 
-The algorithms above were designed for spinning disks. SSDs have no moving head, so seek time and rotational latency are almost zero. On SSDs, the goals shift toward throughput, fairness, and write amplification.
+The algorithms above were designed for spinning disks. SSDs have no moving head, so mechanical seek and rotational latency do not apply. On SSDs, the goals shift toward throughput, fairness, and write amplification.
 
 HDD costs
 seek + rotation dominate
@@ -97,16 +97,29 @@ merge -> [block 100..102]
 
 This is useful on both HDDs and SSDs because it reduces per-request overhead.
 
-## Modern I/O schedulers
+## Current Linux I/O: inspect the actual device
 
-Linux and other OSes offer multiple I/O schedulers tuned for different workloads.
+Linux's block multi-queue (`blk-mq`) mechanism supports parallel software and
+hardware queues. Device type, driver, kernel configuration, and workload matter;
+a seek-minimizing HDD diagram is not an SSD/NVMe tuning prescription. The older
+single-queue names `noop`, `deadline`, and `cfq` belong in historical comparisons,
+not a universal list of current scheduler choices.
 
-- noop: minimal reordering, good for SSDs or hardware RAID
-- deadline: limits how long requests can wait to reduce latency spikes
-- cfq or bfq: fair sharing across processes and cgroups
+Read available policies from the device instead of assuming one is installed:
 
-Choosing the right scheduler depends on the storage device and whether you care more about latency or throughput.
+```sh
+lsblk -d -o NAME,ROTA,TYPE,MODEL
+# Example device; replace nvme0n1 with the name shown by lsblk.
+cat /sys/block/nvme0n1/queue/scheduler
+```
 
-## When each is used
+The bracketed entry is the selected scheduler. Compare throughput, latency, and
+fairness for representative workloads before changing a policy. See the
+[Linux blk-mq documentation](https://docs.kernel.org/block/blk-mq.html).
 
-FCFS is simple but rarely optimal. SSTF gives good throughput but can starve. SCAN and LOOK are balanced choices for general workloads. C-SCAN and C-LOOK aim for fairness by keeping wait times uniform across the disk.
+## Use the right model
+
+FCFS, SSTF, SCAN, and LOOK explain mechanical head-travel tradeoffs. C-SCAN and
+C-LOOK illustrate different service orders. Application-level work in these
+labs instead uses bounded queues, backpressure, and checked I/O; see the
+[modern C/POSIX guide](modern_c_patterns.md).

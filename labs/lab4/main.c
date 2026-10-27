@@ -1,207 +1,140 @@
-#include <errno.h>
-#include <limits.h>
-#include <semaphore.h>
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
+/* C11/POSIX: FIFO waiting chairs and a completion semaphore per customer.
+   Children cannot report a finished haircut until their own service completes.
+ */
+#include "../common/process.h"
 
 typedef struct {
-  int waiting_customers;
-  int chairs;
-  int shutdown;
-  sem_t mutex;
-  sem_t customer_sem;
-  sem_t barber_sem;
-} SharedData;
+  sem_t finished;
+  int next;
+} Customer;
+typedef struct {
+  sem_t mutex, arrivals;
+  int chairs, waiting, head, tail, arrivals_left;
+  Customer customers[];
+} Shop;
 
-static void barber(SharedData *shared);
-static void customer(SharedData *shared, int customer_id);
-static int parse_nonneg_int(const char *text, const char *label,
-                            int *value_out);
-static void safe_sem_wait(sem_t *sem);
-static void safe_sem_post(sem_t *sem);
+static void barber(Shop *shop) {
+  for (;;) {
+    lab_sem_wait(&shop->arrivals);
+    lab_sem_wait(&shop->mutex);
+    if (shop->head < 0) {
+      bool done = shop->arrivals_left == 0;
+      lab_sem_post(&shop->mutex);
+      if (done)
+        break;
+      continue;
+    }
+    int customer = shop->head;
+    shop->head = shop->customers[customer].next;
+    if (shop->head < 0)
+      shop->tail = -1;
+    --shop->waiting;
+    lab_sem_post(&shop->mutex);
+    printf("Barber: Starting haircut for customer %d.\n", customer + 1);
+    lab_simulate_ms(1000);
+    printf("Barber: Finished haircut for customer %d.\n", customer + 1);
+    fflush(stdout);
+    lab_sem_post(&shop->customers[customer].finished);
+  }
+  puts("Barber: Closing shop.");
+}
+
+static void customer(Shop *shop, int id) {
+  lab_sem_wait(&shop->mutex);
+  --shop->arrivals_left;
+  bool accepted = shop->waiting < shop->chairs;
+  if (accepted) {
+    if (shop->tail < 0)
+      shop->head = id;
+    else
+      shop->customers[shop->tail].next = id;
+    shop->tail = id;
+    ++shop->waiting;
+    printf("Customer %d: Sitting in waiting area.\n", id + 1);
+    lab_sem_post(&shop->arrivals);
+  }
+  /* Wake an idle barber after the last admission, even if everyone left. */
+  if (shop->arrivals_left == 0)
+    lab_sem_post(&shop->arrivals);
+  lab_sem_post(&shop->mutex);
+  if (!accepted) {
+    printf("Customer %d: No available chairs. Leaving the shop.\n", id + 1);
+    return;
+  }
+  lab_sem_wait(&shop->customers[id].finished);
+  printf("Customer %d: Haircut done, paying at the cashier.\n", id + 1);
+}
 
 int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s <number_of_chairs> <number_of_customers>\n",
+  int chairs, customers;
+  if (argc != 3 || !lab_parse_int(argv[1], 0, &chairs) ||
+      !lab_parse_int(argv[2], 0, &customers)) {
+    fprintf(stderr, "Usage: %s <nonnegative_chairs> <nonnegative_customers>\n",
             argv[0]);
     return EXIT_FAILURE;
   }
-
-  int chairs = 0;
-  int total_customers = 0;
-  if (parse_nonneg_int(argv[1], "number_of_chairs", &chairs) != 0 ||
-      parse_nonneg_int(argv[2], "number_of_customers", &total_customers) != 0) {
+  if ((size_t)customers > (SIZE_MAX - sizeof(Shop)) / sizeof(Customer))
+    return EXIT_FAILURE;
+  size_t bytes = sizeof(Shop) + (size_t)customers * sizeof(Customer);
+  pid_t *children = calloc((size_t)customers + 1, sizeof(*children));
+  if (!children) {
+    perror("calloc children");
     return EXIT_FAILURE;
   }
-
-  SharedData *shared = mmap(NULL, sizeof(*shared), PROT_READ | PROT_WRITE,
-                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  if (shared == MAP_FAILED) {
+  Shop *shop = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (shop == MAP_FAILED) {
     perror("mmap");
+    free(children);
     return EXIT_FAILURE;
   }
-
-  shared->waiting_customers = 0;
-  shared->chairs = chairs;
-  shared->shutdown = 0;
-
-  if (sem_init(&shared->mutex, 1, 1) == -1 ||
-      sem_init(&shared->customer_sem, 1, 0) == -1 ||
-      sem_init(&shared->barber_sem, 1, 0) == -1) {
-    perror("sem_init");
-    munmap(shared, sizeof(*shared));
+  *shop = (Shop){
+      .chairs = chairs, .head = -1, .tail = -1, .arrivals_left = customers};
+  sem_t *base[] = {&shop->mutex, &shop->arrivals};
+  unsigned int values[] = {1, customers == 0 ? 1U : 0U};
+  if (!lab_sem_initialize(base, values, 2)) {
+    munmap(shop, bytes);
+    free(children);
     return EXIT_FAILURE;
   }
-
-  pid_t barber_pid = fork();
-  if (barber_pid < 0) {
-    perror("fork");
-    munmap(shared, sizeof(*shared));
-    return EXIT_FAILURE;
-  }
-
-  if (barber_pid == 0) {
-    barber(shared);
-    exit(EXIT_SUCCESS);
-  }
-
-  pid_t *customer_pids = NULL;
-  if (total_customers > 0) {
-    customer_pids = calloc((size_t)total_customers, sizeof(*customer_pids));
-    if (!customer_pids) {
-      perror("calloc");
-      return EXIT_FAILURE;
+  int initialized = 0;
+  for (; initialized < customers; ++initialized) {
+    shop->customers[initialized].next = -1;
+    if (sem_init(&shop->customers[initialized].finished, 1, 0) < 0) {
+      perror("sem_init customer");
+      break;
     }
   }
-
-  for (int i = 0; i < total_customers; i++) {
-    pid_t customer_pid = fork();
-    if (customer_pid < 0) {
+  int result = EXIT_FAILURE;
+  size_t started = 0;
+  if (initialized != customers)
+    goto cleanup;
+  for (int id = -1; id < customers; ++id) {
+    pid_t pid = lab_fork();
+    if (pid < 0) {
       perror("fork");
-      return EXIT_FAILURE;
+      lab_terminate_children(children, started);
+      goto cleanup;
     }
-    if (customer_pid == 0) {
-      srand((unsigned int)(time(NULL) ^ (getpid() << 16)));
-      usleep((useconds_t)(rand() % 500000));
-      customer(shared, i + 1);
-      exit(EXIT_SUCCESS);
+    if (pid == 0) {
+      if (id < 0)
+        barber(shop);
+      else
+        customer(shop, id);
+      lab_child_exit(EXIT_SUCCESS);
     }
-    customer_pids[i] = customer_pid;
+    children[started++] = pid;
   }
-
-  for (int i = 0; i < total_customers; i++) {
-    int status = 0;
-    while (waitpid(customer_pids[i], &status, 0) == -1) {
-      if (errno == EINTR) {
-        continue;
-      }
-      perror("waitpid");
-      break;
-    }
+  if (lab_supervise_children(children, started)) {
+    puts("Simulation complete.");
+    result = EXIT_SUCCESS;
   }
-
-  free(customer_pids);
-
-  safe_sem_wait(&shared->mutex);
-  shared->shutdown = 1;
-  safe_sem_post(&shared->mutex);
-  safe_sem_post(&shared->customer_sem);
-
-  while (waitpid(barber_pid, NULL, 0) == -1) {
-    if (errno == EINTR) {
-      continue;
-    }
-    perror("waitpid");
-    break;
-  }
-
-  sem_destroy(&shared->mutex);
-  sem_destroy(&shared->customer_sem);
-  sem_destroy(&shared->barber_sem);
-  munmap(shared, sizeof(*shared));
-
-  printf("Simulation complete.\n");
-  return EXIT_SUCCESS;
-}
-
-static void barber(SharedData *shared) {
-  printf("Barber: Starting work. Waiting for customers...\n");
-  for (;;) {
-    safe_sem_wait(&shared->customer_sem);
-
-    safe_sem_wait(&shared->mutex);
-    if (shared->shutdown && shared->waiting_customers == 0) {
-      safe_sem_post(&shared->mutex);
-      break;
-    }
-
-    shared->waiting_customers--;
-    printf("Barber: Starting haircut. Waiting customers: %d\n",
-           shared->waiting_customers);
-    safe_sem_post(&shared->barber_sem);
-    safe_sem_post(&shared->mutex);
-
-    sleep(1);
-    printf("Barber: Finished haircut.\n");
-  }
-
-  printf("Barber: Closing shop.\n");
-}
-
-static void customer(SharedData *shared, int customer_id) {
-  printf("Customer %d: Arrived at the barbershop.\n", customer_id);
-
-  safe_sem_wait(&shared->mutex);
-  if (shared->waiting_customers < shared->chairs) {
-    shared->waiting_customers++;
-    printf("Customer %d: Sitting in waiting area. Waiting customers: %d\n",
-           customer_id, shared->waiting_customers);
-    safe_sem_post(&shared->customer_sem);
-    safe_sem_post(&shared->mutex);
-
-    safe_sem_wait(&shared->barber_sem);
-    printf("Customer %d: Getting a haircut.\n", customer_id);
-    printf("Customer %d: Haircut done, paying at the cashier.\n", customer_id);
-    return;
-  }
-
-  safe_sem_post(&shared->mutex);
-  printf("Customer %d: No available chairs. Leaving the shop.\n", customer_id);
-}
-
-static int parse_nonneg_int(const char *text, const char *label,
-                            int *value_out) {
-  char *end = NULL;
-  errno = 0;
-  long value = strtol(text, &end, 10);
-  if (errno != 0 || end == text || *end != '\0' || value < 0 ||
-      value > INT_MAX) {
-    fprintf(stderr, "Invalid %s: %s\n", label, text);
-    return -1;
-  }
-
-  *value_out = (int)value;
-  return 0;
-}
-
-static void safe_sem_wait(sem_t *sem) {
-  while (sem_wait(sem) == -1) {
-    if (errno == EINTR) {
-      continue;
-    }
-    perror("sem_wait");
-    exit(EXIT_FAILURE);
-  }
-}
-
-static void safe_sem_post(sem_t *sem) {
-  if (sem_post(sem) == -1) {
-    perror("sem_post");
-    exit(EXIT_FAILURE);
-  }
+cleanup:
+  for (int id = 0; id < initialized; ++id)
+    sem_destroy(&shop->customers[id].finished);
+  sem_destroy(&shop->arrivals);
+  sem_destroy(&shop->mutex);
+  munmap(shop, bytes);
+  free(children);
+  return result;
 }
