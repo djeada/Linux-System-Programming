@@ -13,15 +13,23 @@ Type [vulnerable.c](vulnerable.c) line by line. Build with `make -C security-vid
 ## Trigger the effect
 
 ```sh
-cd security-videos/episodes/04-path-traversal
-mkdir -p notes
-printf 'PUBLIC\n' > notes/hello.txt
-printf 'PRIVATE\n' > private.txt
-../../build/04-path-traversal/vulnerable '../private.txt'
-../../build/04-path-traversal/fixed '../private.txt'
+# Run these from the repository root, in a disposable directory:
+make -C security-videos all
+BIN="$(pwd)/security-videos/build/04-path-traversal"
+WORK="$(mktemp -d)"
+(
+  cd "$WORK"
+  mkdir notes
+  printf 'PUBLIC\n' > notes/hello.txt
+  printf 'PRIVATE\n' > private.txt
+  "$BIN/vulnerable" '../private.txt'  # reads PRIVATE (bug)
+  "$BIN/fixed" '../private.txt'       # rejects traversal
+  "$BIN/fixed" hello.txt              # reads PUBLIC
+)
+rm -rf "$WORK"
 ```
 
-**Workspace warning:** The demo writes only disposable files in the lesson directory (or a temporary copy of it); it should not be run from the repository root. Clean up the sample files afterwards. For a fully isolated run, use a fresh temporary working directory as in the automated tests.
+**Workspace warning:** The commands create only dummy files inside `mktemp -d` and clean them up. Never substitute real directories or real secrets.
 
 ## Why this is a vulnerability
 

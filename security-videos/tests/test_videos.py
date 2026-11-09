@@ -93,7 +93,7 @@ class SecurityVideoTests(unittest.TestCase):
         self.assertEqual(x.stdout, y.stdout)
         fixed = program(slug, "fixed")
         self.assertEqual(0, fixed.returncode)
-        self.assertRegex(fixed.stdout, r"^token=[0-9a-f]{8}\n$")
+        self.assertRegex(fixed.stdout, r"^token=[0-9a-f]{32}\n$")
 
     def test_tempfile_rejects_symlink(self):
         slug = "15-temp-file-symlink"

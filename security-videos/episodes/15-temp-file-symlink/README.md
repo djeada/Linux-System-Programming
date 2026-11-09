@@ -13,18 +13,25 @@ Type [vulnerable.c](vulnerable.c) line by line. Build with `make -C security-vid
 ## Trigger the effect
 
 ```sh
-cd security-videos/episodes/15-temp-file-symlink
-mkdir -p scratch
-printf 'ORIGINAL\n' > victim.txt
-ln -s ../victim.txt scratch/report.tmp
-../../build/15-temp-file-symlink/vulnerable
-cat victim.txt
-printf 'ORIGINAL\n' > victim.txt
-../../build/15-temp-file-symlink/fixed
-cat victim.txt
+# Run these from the repository root, in a disposable directory:
+make -C security-videos all
+BIN="$(pwd)/security-videos/build/15-temp-file-symlink"
+WORK="$(mktemp -d)"
+(
+  cd "$WORK"
+  mkdir scratch
+  printf 'ORIGINAL\n' > victim.txt
+  ln -s ../victim.txt scratch/report.tmp
+  "$BIN/vulnerable"                    # follows symlink
+  cat victim.txt                        # REPORT (overwritten)
+  printf 'ORIGINAL\n' > victim.txt
+  "$BIN/fixed"                         # rejects existing symlink
+  cat victim.txt                        # ORIGINAL (preserved)
+)
+rm -rf "$WORK"
 ```
 
-**Workspace warning:** The demo writes only disposable files in the lesson directory (or a temporary copy of it); it should not be run from the repository root. Clean up the sample files afterwards. For a fully isolated run, use a fresh temporary working directory as in the automated tests.
+**Workspace warning:** The commands create only dummy files inside `mktemp -d` and clean them up. Never substitute real directories or real secrets.
 
 ## Why this is a vulnerability
 
