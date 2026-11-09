@@ -93,6 +93,11 @@ The `notes/` directory contains comprehensive course materials covering theoreti
 
 These notes are perfect for reviewing concepts before tackling labs or preparing for exams.
 
+
+## C Security Exploit Video Track
+
+For a 15-episode, **code → break → fix** series with intentionally vulnerable and corrected C programs, local exploit demonstrations and regression tests, see **[C Security Videos](security-videos/README.md)**. These are opt-in, disposable educational labs; the normal 20 system-programming labs are unchanged.
+
 ## Getting Started
 
 ### Prerequisites
